@@ -9,7 +9,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from config import ALLOWED_ORIGINS
-from routers import check, report, entities, auth
+from routers import check, report, entities, auth, scan
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -21,7 +21,7 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 app = FastAPI(
     title="ScamGuard API",
     description="Scam & Fraud Detection — Supabase + NLP powered.",
-    version="2.0.0",
+    version="3.0.0",
 )
 
 app.state.limiter = limiter
@@ -41,6 +41,7 @@ app.include_router(check.router)
 app.include_router(report.router)
 app.include_router(entities.router)
 app.include_router(auth.router)
+app.include_router(scan.router)  # v3 enhanced scan
 
 # ── Static frontend ────────────────────────────────────────────────────────
 _BACKEND_DIR  = os.path.dirname(os.path.abspath(__file__))

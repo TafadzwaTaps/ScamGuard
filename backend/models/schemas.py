@@ -101,3 +101,71 @@ class KeywordIn(BaseModel):
         if not (0 < v <= 20):
             raise ValueError("Weight must be between 0 and 20")
         return v
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ENHANCEMENT v3 — Additive schemas for /api/v1/scan endpoint
+# Existing schemas above are untouched.
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ZimFlag(BaseModel):
+    category: str
+    explanation: str
+    confidence: float
+    advice: str
+
+
+class ZimIntelResponse(BaseModel):
+    zim_score: float
+    categories: List[str]
+    flags: List[ZimFlag]
+    safety_advice: str
+    is_zimbabwe_specific: bool
+
+
+class RiskFactorOut(BaseModel):
+    factor: str
+    detail: str
+    severity: str           # low | medium | high | critical
+    score_contribution: float
+
+
+class ExplainResponse(BaseModel):
+    summary: str
+    risk_factors: List[RiskFactorOut]
+    urgency_detected: bool
+    impersonation_detected: bool
+    financial_request_detected: bool
+    personal_data_request_detected: bool
+    what_to_do: List[str]
+    scam_type_guess: str
+
+
+class URLAnalysisResponse(BaseModel):
+    is_suspicious: bool
+    url_score: float
+    flags: List[str]
+    explanations: List[str]
+    domain: str
+    is_shortened: bool
+    has_ssl: bool
+
+
+class ScanResponse(BaseModel):
+    """
+    Full enhanced scan response — superset of CheckResponse.
+    All existing CheckResponse fields preserved + extended.
+    """
+    # ── Core fields (same as CheckResponse) ───────────────────────────────
+    risk_score: float
+    status: str
+    report_count: int
+    nlp_flags: NLPResult
+    sample_reports: List[ReportOut]
+    entity_id: Optional[str] = None
+
+    # ── New enhanced fields ────────────────────────────────────────────────
+    zim_intel: Optional[ZimIntelResponse] = None
+    explanation: Optional[ExplainResponse] = None
+    url_analysis: Optional[URLAnalysisResponse] = None
+    scan_id: Optional[str] = None
