@@ -1,8 +1,8 @@
-from __future__ import annotations
-from pydantic import BaseModel, field_validator, model_validator
+# NO "from __future__ import annotations" — Pydantic v2 + FastAPI require
+# concrete types at class definition time for forward-ref resolution to work.
+from pydantic import BaseModel, field_validator
 from typing import List, Optional
 from datetime import datetime
-import re
 
 VALID_TYPES = {"phone", "url", "message"}
 
@@ -60,7 +60,7 @@ class ReportCreate(BaseModel):
         return [t.strip().lower()[:50] for t in (v or []) if t.strip()][:10]
 
 
-# ── Output schemas ─────────────────────────────────────────────────────────
+# ── Core output schemas ────────────────────────────────────────────────────
 
 class ReportOut(BaseModel):
     id: str
@@ -72,12 +72,12 @@ class ReportOut(BaseModel):
 class NLPResult(BaseModel):
     matched_keywords: List[str]
     regex_matches: List[str]
-    confidence: float          # 0.0 – 1.0
+    confidence: float
 
 
 class CheckResponse(BaseModel):
     risk_score: float
-    status: str                # safe | suspicious | high_risk
+    status: str
     report_count: int
     nlp_flags: NLPResult
     sample_reports: List[ReportOut]
@@ -103,10 +103,7 @@ class KeywordIn(BaseModel):
         return v
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ENHANCEMENT v3 — Additive schemas for /api/v1/scan endpoint
-# Existing schemas above are untouched.
-# ══════════════════════════════════════════════════════════════════════════════
+# ── v3 Enhanced schemas (for /api/v1/scan) ────────────────────────────────
 
 class ZimFlag(BaseModel):
     category: str
@@ -126,7 +123,7 @@ class ZimIntelResponse(BaseModel):
 class RiskFactorOut(BaseModel):
     factor: str
     detail: str
-    severity: str           # low | medium | high | critical
+    severity: str
     score_contribution: float
 
 
@@ -152,19 +149,14 @@ class URLAnalysisResponse(BaseModel):
 
 
 class ScanResponse(BaseModel):
-    """
-    Full enhanced scan response — superset of CheckResponse.
-    All existing CheckResponse fields preserved + extended.
-    """
-    # ── Core fields (same as CheckResponse) ───────────────────────────────
+    # Core fields — identical to CheckResponse
     risk_score: float
     status: str
     report_count: int
     nlp_flags: NLPResult
     sample_reports: List[ReportOut]
     entity_id: Optional[str] = None
-
-    # ── New enhanced fields ────────────────────────────────────────────────
+    # Enhanced fields
     zim_intel: Optional[ZimIntelResponse] = None
     explanation: Optional[ExplainResponse] = None
     url_analysis: Optional[URLAnalysisResponse] = None

@@ -10,7 +10,6 @@ Superset of existing /api/v1/check — adds:
 Preserves existing /api/v1/check endpoint fully.
 All new logic lives in separate service modules.
 """
-from __future__ import annotations
 import uuid
 from fastapi import APIRouter, Request, Depends
 from slowapi import Limiter

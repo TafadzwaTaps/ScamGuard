@@ -127,15 +127,33 @@ const Modal = (() => {
     if (_instance) return _instance;
     const el = document.getElementById("authModal");
     if (!el) return null;
-    if (typeof bootstrap === "undefined") {
-      // Graceful fallback: manual CSS show/hide
-      console.warn("[ScamGuard] Bootstrap JS unavailable — using manual modal.");
+    // bootstrap-modal.js is loaded synchronously before app.js,
+    // so bootstrap is always defined here. Guard kept for safety.
+    if (typeof bootstrap === "undefined" || !bootstrap.Modal) {
+      console.error("[ScamGuard] bootstrap.Modal not found — bootstrap-modal.js may not have loaded.");
+      // Manual fallback so UI still works
       return {
-        show() { el.classList.add("manual-show"); el.removeAttribute("aria-hidden"); document.body.classList.add("modal-open"); },
-        hide() { el.classList.remove("manual-show"); el.setAttribute("aria-hidden", "true"); document.body.classList.remove("modal-open"); },
+        show() {
+          el.style.display = "flex";
+          el.style.alignItems = "center";
+          el.style.justifyContent = "center";
+          el.style.position = "fixed";
+          el.style.inset = "0";
+          el.style.zIndex = "9999";
+          el.style.background = "rgba(0,0,0,.7)";
+          el.classList.add("show");
+          el.removeAttribute("aria-hidden");
+          document.body.style.overflow = "hidden";
+        },
+        hide() {
+          el.style.display = "none";
+          el.classList.remove("show");
+          el.setAttribute("aria-hidden", "true");
+          document.body.style.overflow = "";
+        },
       };
     }
-    // Bootstrap.Modal — prevent duplicate instance
+    // Prevent duplicate instances — use getOrCreateInstance
     _instance = bootstrap.Modal.getOrCreateInstance(el);
     return _instance;
   }

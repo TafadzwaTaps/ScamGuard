@@ -648,21 +648,9 @@
 <!-- Toast container -->
 <div class="toast-container" id="toast-container" aria-live="polite" role="log"></div>
 
-<!-- Bootstrap JS — no integrity attr (avoids SRI mismatch in Edge/Chrome) -->
-<!-- Bootstrap JS — self-hosted to bypass Edge Tracking Prevention -->
-<!-- Falls back to CDN if local file is somehow missing -->
-<script>
-(function(){
-  var s = document.createElement('script');
-  s.src = '/static/bootstrap-modal.js';
-  s.onerror = function(){
-    var fb = document.createElement('script');
-    fb.src = 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js';
-    document.head.appendChild(fb);
-  };
-  document.head.appendChild(s);
-})();
-</script>
+<!-- Bootstrap JS: self-hosted, synchronous — no CDN, no SRI, no tracking prevention issues -->
+<script src="/static/bootstrap-modal.js"></script>
+<!-- App JS loads after bootstrap is defined -->
 <script src="/static/app.js"></script>
 </body>
 </html>
