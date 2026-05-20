@@ -56,8 +56,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # ── Remove fingerprinting headers ──────────────────────────────────
-        response.headers.pop("server",         None)
-        response.headers.pop("x-powered-by",   None)
+        # MutableHeaders does not have .pop() — use del with existence check
+        for _h in ("server", "x-powered-by"):
+            if _h in response.headers:
+                del response.headers[_h]
 
         # ── Request tracing ────────────────────────────────────────────────
         response.headers["X-Request-ID"] = request_id
