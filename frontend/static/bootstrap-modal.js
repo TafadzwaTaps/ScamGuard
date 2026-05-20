@@ -1,134 +1,113 @@
 /**
- * ScamGuard — Self-hosted Bootstrap 5 Modal & Utility Polyfill
- * Implements: Modal.getOrCreateInstance(), modal.show(), modal.hide()
- *             data-bs-dismiss="modal", aria management, keyboard (Esc)
- *             Tab-trap focus management, backdrop click-to-close.
+ * ScamGuard — Auth Modal Controller (v3)
+ * =======================================
+ * Manages the #authModal overlay with zero dependency on Bootstrap CSS.
+ * The auth modal uses inline styles + sg-modal-content classes only —
+ * NO Bootstrap .modal/.modal-dialog classes that set pointer-events:none.
  *
- * Drop-in replacement for bootstrap.bundle.min.js Modal functionality.
- * No CDN. No tracking. Served from /static/ by FastAPI.
- * ~5KB. Works in Edge, Chrome, Firefox, Safari.
+ * Exposes: window.bootstrap.Modal (getOrCreateInstance, getInstance)
+ * Also:    window.bootstrap.Collapse (for navbar hamburger)
  */
 (function (global) {
   "use strict";
 
-  /* ── Shared backdrop ───────────────────────────────────────────────────── */
-  let _backdrop = null;
-  let _openCount = 0;
-
-  function getBackdrop() {
-    if (!_backdrop) {
-      _backdrop = document.createElement("div");
-      _backdrop.className = "modal-backdrop fade";
-      _backdrop.style.cssText = [
-        "position:fixed", "inset:0", "z-index:1040",
-        "background:rgba(0,0,0,.65)", "opacity:0",
-        "transition:opacity .15s linear", "backdrop-filter:blur(4px)",
-      ].join(";");
-      document.body.appendChild(_backdrop);
-    }
-    return _backdrop;
-  }
-
-  /* ── Modal class ────────────────────────────────────────────────────────── */
+  /* ─── Modal ──────────────────────────────────────────────────────────── */
   class Modal {
-    constructor(element) {
-      this._el       = typeof element === "string" ? document.querySelector(element) : element;
-      this._dialog   = this._el?.querySelector(".modal-dialog");
+    constructor(el) {
+      this._el       = typeof el === "string" ? document.querySelector(el) : el;
       this._isShown  = false;
       this._lastFocus = null;
+      this._keyFn    = null;
 
-      // Wire data-bs-dismiss inside this modal
+      // Wire close buttons (data-bs-dismiss="modal")
       this._el?.querySelectorAll("[data-bs-dismiss='modal']").forEach(btn => {
-        btn.addEventListener("click", () => this.hide());
+        btn.addEventListener("click", e => { e.stopPropagation(); this.hide(); });
       });
 
-      // Close on backdrop click
-      this._el?.addEventListener("click", (e) => {
+      // Click on the dark overlay backdrop (not the white card) closes modal
+      this._el?.addEventListener("click", e => {
+        // Only close if the click target IS the overlay itself, not a child
         if (e.target === this._el) this.hide();
       });
     }
 
     show() {
       if (this._isShown) return;
-      this._isShown = true;
+      this._isShown   = true;
       this._lastFocus = document.activeElement;
 
-      // Body class
-      _openCount++;
-      document.body.classList.add("modal-open");
-      document.body.style.overflow = "hidden";
+      // Lock body scroll
+      document.body.style.overflow    = "hidden";
+      document.body.style.paddingRight = "0";
 
-      // Backdrop
-      const bd = getBackdrop();
-      bd.style.display = "block";
-      requestAnimationFrame(() => { bd.style.opacity = "1"; });
-
-      // Show modal element
-      this._el.style.display = "block";
+      // Show overlay — use flex so content is centred
+      Object.assign(this._el.style, {
+        display:        "flex",
+        opacity:        "0",
+        transition:     "opacity .2s ease",
+      });
       this._el.removeAttribute("aria-hidden");
       this._el.setAttribute("aria-modal", "true");
-      this._el.setAttribute("role", "dialog");
 
+      // Fade in
       requestAnimationFrame(() => {
-        this._el.classList.add("show");
-        // Focus first focusable element
-        const focusable = this._el.querySelectorAll(
-          "input:not([disabled]), button:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])"
-        );
-        if (focusable.length) focusable[0].focus();
+        requestAnimationFrame(() => {
+          this._el.style.opacity = "1";
+        });
       });
 
-      // Keyboard: Esc to close, Tab trap
-      this._keyHandler = (e) => {
-        if (e.key === "Escape") { this.hide(); return; }
-        if (e.key === "Tab") { this._trapFocus(e); }
-      };
-      document.addEventListener("keydown", this._keyHandler);
+      // Focus first input after animation
+      setTimeout(() => {
+        const firstInput = this._el.querySelector(
+          "input:not([disabled]):not([type='hidden'])"
+        );
+        firstInput?.focus();
+        this._el.dispatchEvent(new CustomEvent("shown.bs.modal", { bubbles: true }));
+      }, 220);
 
-      // Dispatch Bootstrap-compatible event
-      this._el.dispatchEvent(new CustomEvent("shown.bs.modal", { bubbles: true }));
+      // Keyboard handler
+      this._keyFn = e => {
+        if (!this._isShown) return;
+        if (e.key === "Escape") { e.preventDefault(); this.hide(); return; }
+        if (e.key === "Tab")   this._trapFocus(e);
+      };
+      document.addEventListener("keydown", this._keyFn);
     }
 
     hide() {
       if (!this._isShown) return;
       this._isShown = false;
 
-      this._el.classList.remove("show");
-      this._el.setAttribute("aria-hidden", "true");
-      this._el.removeAttribute("aria-modal");
-
-      // Remove event listener
-      if (this._keyHandler) {
-        document.removeEventListener("keydown", this._keyHandler);
-        this._keyHandler = null;
+      if (this._keyFn) {
+        document.removeEventListener("keydown", this._keyFn);
+        this._keyFn = null;
       }
+
+      // Fade out
+      this._el.style.opacity = "0";
 
       setTimeout(() => {
         this._el.style.display = "none";
-
-        _openCount = Math.max(0, _openCount - 1);
-        if (_openCount === 0) {
-          document.body.classList.remove("modal-open");
-          document.body.style.overflow = "";
-          const bd = getBackdrop();
-          bd.style.opacity = "0";
-          setTimeout(() => { if (_openCount === 0) bd.style.display = "none"; }, 160);
-        }
-
-        // Restore focus
-        if (this._lastFocus?.focus) this._lastFocus.focus();
-
+        this._el.style.transition = "";
+        this._el.setAttribute("aria-hidden", "true");
+        this._el.removeAttribute("aria-modal");
+        document.body.style.overflow    = "";
+        document.body.style.paddingRight = "";
+        try { this._lastFocus?.focus?.(); } catch (_) {}
         this._el.dispatchEvent(new CustomEvent("hidden.bs.modal", { bubbles: true }));
-      }, 150);
+      }, 210);
     }
 
     _trapFocus(e) {
-      const focusable = Array.from(this._el.querySelectorAll(
-        "a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])"
-      )).filter(el => el.offsetParent !== null);
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last  = focusable[focusable.length - 1];
+      const all = Array.from(this._el.querySelectorAll(
+        "button:not([disabled]),input:not([disabled]),textarea:not([disabled])," +
+        "select:not([disabled]),a[href],[tabindex]:not([tabindex='-1'])"
+      )).filter(el => {
+        const s = window.getComputedStyle(el);
+        return s.display !== "none" && s.visibility !== "hidden" && el.offsetParent !== null;
+      });
+      if (all.length < 2) return;
+      const first = all[0], last = all[all.length - 1];
       if (e.shiftKey && document.activeElement === first) {
         e.preventDefault(); last.focus();
       } else if (!e.shiftKey && document.activeElement === last) {
@@ -136,45 +115,46 @@
       }
     }
 
-    // Static: prevent duplicate instances
-    static getOrCreateInstance(element) {
-      const el = typeof element === "string" ? document.querySelector(element) : element;
+    static getOrCreateInstance(el) {
+      if (typeof el === "string") el = document.querySelector(el);
       if (!el) return null;
-      if (el._bsModal) return el._bsModal;
-      el._bsModal = new Modal(el);
-      return el._bsModal;
+      if (!el.__sgModal) el.__sgModal = new Modal(el);
+      return el.__sgModal;
     }
 
-    static getInstance(element) {
-      const el = typeof element === "string" ? document.querySelector(element) : element;
-      return el?._bsModal || null;
+    static getInstance(el) {
+      if (typeof el === "string") el = document.querySelector(el);
+      return el?.__sgModal ?? null;
     }
   }
 
-  /* ── Collapse (minimal — for navbar toggler) ────────────────────────────── */
+  /* ─── Collapse (navbar toggler) ─────────────────────────────────────── */
   class Collapse {
-    constructor(element, options = {}) {
-      this._el     = typeof element === "string" ? document.querySelector(element) : element;
-      this._toggle = options.toggle !== false;
-      if (this._toggle) this.toggle();
+    constructor(el, opts = {}) {
+      if (typeof el === "string") el = document.querySelector(el);
+      this._el = el;
+      if (opts.toggle !== false) this.toggle();
     }
     show()   { if (!this._el) return; this._el.classList.add("show"); this._el.style.height = "auto"; }
-    hide()   { if (!this._el) return; this._el.classList.remove("show"); }
-    toggle() { if (!this._el) return; this._el.classList.contains("show") ? this.hide() : this.show(); }
-    static getOrCreateInstance(el) { return el._bsCollapse || (el._bsCollapse = new Collapse(el, { toggle: false })); }
+    hide()   { if (!this._el) return; this._el.classList.remove("show"); this._el.style.height = ""; }
+    toggle() { this._el?.classList.contains("show") ? this.hide() : this.show(); }
+    static getOrCreateInstance(el) {
+      if (typeof el === "string") el = document.querySelector(el);
+      if (!el) return null;
+      if (!el.__sgCollapse) el.__sgCollapse = new Collapse(el, { toggle: false });
+      return el.__sgCollapse;
+    }
   }
 
-  /* ── Expose as global `bootstrap` namespace ─────────────────────────────── */
+  /* ─── Expose as window.bootstrap ───────────────────────────────────── */
   global.bootstrap = { Modal, Collapse };
 
-  /* ── Auto-wire data-bs-toggle="collapse" ────────────────────────────────── */
-  document.addEventListener("DOMContentLoaded", () => {
-    document.addEventListener("click", (e) => {
-      const toggler = e.target.closest("[data-bs-toggle='collapse']");
-      if (!toggler) return;
-      const target = document.querySelector(toggler.getAttribute("data-bs-target"));
-      if (target) Collapse.getOrCreateInstance(target).toggle();
-    });
+  /* ─── Auto-wire data-bs-toggle="collapse" ───────────────────────────── */
+  document.addEventListener("click", e => {
+    const tog = e.target.closest("[data-bs-toggle='collapse']");
+    if (!tog) return;
+    const target = document.querySelector(tog.getAttribute("data-bs-target") || "");
+    if (target) Collapse.getOrCreateInstance(target).toggle();
   });
 
 })(window);

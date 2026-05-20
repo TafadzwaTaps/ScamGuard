@@ -106,7 +106,7 @@ const API = {
   },
   async report(payload) {
     const res = await this.post("/api/v1/report", payload);
-    if (res.status === 401) { Auth.clear(); Modal.open("login"); throw new Error("Session expired. Please log in again."); }
+    if (res.status === 401) { Auth.clear(); window.location.href = "/login"; throw new Error("Session expired. Please log in again."); }
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Error ${res.status}`); }
     return res.json();
   },
@@ -118,102 +118,20 @@ const API = {
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
-   5. MODAL MODULE — Bootstrap 5 wrapper, no duplicate instances, keyboard safe
+   5. MODAL MODULE — replaced with page redirects
+   Login → /login page   Register → /register page
+   Session stored in localStorage is read on every page load.
 ════════════════════════════════════════════════════════════════════════════ */
-const Modal = (() => {
-  let _instance = null;
-
-  function _getInstance() {
-    if (_instance) return _instance;
-    const el = document.getElementById("authModal");
-    if (!el) return null;
-    // bootstrap-modal.js is loaded synchronously before app.js,
-    // so bootstrap is always defined here. Guard kept for safety.
-    if (typeof bootstrap === "undefined" || !bootstrap.Modal) {
-      console.error("[ScamGuard] bootstrap.Modal not found — bootstrap-modal.js may not have loaded.");
-      // Manual fallback so UI still works
-      return {
-        show() {
-          el.style.display = "flex";
-          el.style.alignItems = "center";
-          el.style.justifyContent = "center";
-          el.style.position = "fixed";
-          el.style.inset = "0";
-          el.style.zIndex = "9999";
-          el.style.background = "rgba(0,0,0,.7)";
-          el.classList.add("show");
-          el.removeAttribute("aria-hidden");
-          document.body.style.overflow = "hidden";
-        },
-        hide() {
-          el.style.display = "none";
-          el.classList.remove("show");
-          el.setAttribute("aria-hidden", "true");
-          document.body.style.overflow = "";
-        },
-      };
-    }
-    // Prevent duplicate instances — use getOrCreateInstance
-    _instance = bootstrap.Modal.getOrCreateInstance(el);
-    return _instance;
-  }
-
-  function open(tab = "login") {
-    Modal.clearAlerts();
-    Modal.switchTab(tab);
-    const m = _getInstance();
-    if (m) m.show();
-  }
-
-  function close() {
-    const m = _getInstance();
-    if (m) m.hide();
-  }
-
-  function switchTab(tab) {
-    const loginWrap = document.getElementById("login-form-wrap");
-    const regWrap   = document.getElementById("register-form-wrap");
-    const tabLogin  = document.getElementById("tab-login");
-    const tabReg    = document.getElementById("tab-register");
-    const slider    = document.getElementById("tab-slider");
-
-    if (!loginWrap || !regWrap) return;
-    const isLogin = tab === "login";
-    loginWrap.classList.toggle("d-none", !isLogin);
-    regWrap.classList.toggle("d-none",    isLogin);
-    tabLogin.classList.toggle("active",   isLogin);
-    tabReg.classList.toggle("active",    !isLogin);
-    tabLogin.setAttribute("aria-selected",  String(isLogin));
-    tabReg.setAttribute("aria-selected",   String(!isLogin));
-
-    // Animate slider
-    if (slider) {
-      const activeBtn = isLogin ? tabLogin : tabReg;
-      slider.style.left  = activeBtn.offsetLeft + "px";
-      slider.style.width = activeBtn.offsetWidth + "px";
-    }
-    Modal.clearAlerts();
-  }
-
-  function clearAlerts() {
-    ["auth-modal-alert", "auth-modal-success"].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) { el.textContent = ""; el.classList.remove("visible"); }
-    });
-  }
-
-  function showErr(msg) {
-    const el = document.getElementById("auth-modal-alert");
-    if (el) { el.innerHTML = `<i class="bi bi-exclamation-triangle-fill"></i> ${esc(msg)}`; el.classList.add("visible"); }
-  }
-
-  function showOk(msg) {
-    const el = document.getElementById("auth-modal-success");
-    if (el) { el.innerHTML = `<i class="bi bi-check-circle-fill"></i> ${esc(msg)}`; el.classList.add("visible"); }
-  }
-
-  return { open, close, switchTab, clearAlerts, showErr, showOk };
-})();
+const Modal = {
+  open(tab = "login") {
+    window.location.href = tab === "register" ? "/register" : "/login";
+  },
+  close()       { /* no-op */ },
+  showErr()     { /* no-op */ },
+  showOk()      { /* no-op */ },
+  switchTab(tab){ window.location.href = tab === "register" ? "/register" : "/login"; },
+  _currentTab: "login",
+};
 
 /* ════════════════════════════════════════════════════════════════════════════
    6. TOAST MODULE
@@ -575,7 +493,7 @@ async function handleReportSubmit(e) {
   UI.hideAlert("report-alert");
   UI.hideAlert("report-success");
 
-  if (!Auth.isLoggedIn()) { Modal.open("login"); return; }
+  if (!Auth.isLoggedIn()) { window.location.href = "/login"; return; }
 
   const type        = document.getElementById("rep-type")?.value;
   const value       = document.getElementById("rep-value")?.value.trim();
@@ -607,9 +525,15 @@ async function handleReportSubmit(e) {
 async function handleLogin() {
   const email    = document.getElementById("login-email")?.value.trim();
   const password = document.getElementById("login-password")?.value;
-  if (!email || !password) { Modal.showErr("Email and password are required."); return; }
+  if (!email) { Modal.showErr("Please enter your email address."); return; }
+  if (!password) { Modal.showErr("Please enter your password."); return; }
+  if (!email.includes("@")) { Modal.showErr("Please enter a valid email address."); return; }
+
+  const btn = document.getElementById("login-submit-btn");
+  if (btn) { btn.disabled = true; btn.style.opacity = ".6"; }
   UI.setSpinner("login-spinner", true);
   Modal.clearAlerts();
+
   try {
     await Auth.login(email, password);
     Modal.close();
@@ -618,6 +542,7 @@ async function handleLogin() {
     Modal.showErr(err.message);
   } finally {
     UI.setSpinner("login-spinner", false);
+    if (btn) { btn.disabled = false; btn.style.opacity = ""; }
   }
 }
 
@@ -625,18 +550,30 @@ async function handleLogin() {
 async function handleRegister() {
   const email    = document.getElementById("reg-email")?.value.trim();
   const password = document.getElementById("reg-password")?.value;
-  if (!email || !password) { Modal.showErr("Email and password are required."); return; }
-  if (password.length < 6)  { Modal.showErr("Password must be at least 6 characters."); return; }
+  if (!email) { Modal.showErr("Please enter your email address."); return; }
+  if (!email.includes("@")) { Modal.showErr("Please enter a valid email address."); return; }
+  if (!password) { Modal.showErr("Please enter a password."); return; }
+  if (password.length < 6) { Modal.showErr("Password must be at least 6 characters."); return; }
+
+  const btn = document.getElementById("register-submit-btn");
+  if (btn) { btn.disabled = true; btn.style.opacity = ".6"; }
   UI.setSpinner("register-spinner", true);
   Modal.clearAlerts();
+
   try {
     const data = await Auth.register(email, password);
-    Modal.showOk(data.message || "Account created! Check your email to confirm.");
-    Toast.ok("Account created successfully!");
+    Modal.showOk(data.message || "Account created! Check your email inbox to confirm, then log in.");
+    Toast.ok("Account created — check your email!");
+    // Clear fields after success
+    const emailEl = document.getElementById("reg-email");
+    const pwEl    = document.getElementById("reg-password");
+    if (emailEl) emailEl.value = "";
+    if (pwEl)    pwEl.value    = "";
   } catch (err) {
     Modal.showErr(err.message);
   } finally {
     UI.setSpinner("register-spinner", false);
+    if (btn) { btn.disabled = false; btn.style.opacity = ""; }
   }
 }
 
@@ -701,9 +638,9 @@ function wireEvents() {
   document.getElementById("report-form")?.addEventListener("submit", handleReportSubmit);
 
   // Auth buttons (no inline onclick)
-  document.getElementById("nav-auth-btn")?.addEventListener("click", () => Modal.open("login"));
+  // nav-auth-btn is an <a href="/login"> — no JS needed
   document.getElementById("nav-logout-btn")?.addEventListener("click", () => { Auth.clear(); Toast.info("Logged out."); });
-  document.getElementById("lock-login-btn")?.addEventListener("click", () => Modal.open("login"));
+  document.getElementById("lock-login-btn")?.addEventListener("click", () => window.location.href = "/login");
 
   // Modal tab buttons
   document.getElementById("tab-login")?.addEventListener("click",    () => Modal.switchTab("login"));
@@ -739,22 +676,35 @@ function wireEvents() {
     });
   });
 
-  // Bootstrap modal: init slider after shown
+  // Bootstrap modal: position tab slider after modal is fully visible
   const authModal = document.getElementById("authModal");
   if (authModal) {
-    authModal.addEventListener("shown.bs.modal", () => Modal.switchTab("login"));
-    // Manual modal close (fallback)
-    authModal.addEventListener("click", e => {
-      if (e.target === authModal) Modal.close();
+    authModal.addEventListener("shown.bs.modal", () => {
+      // Re-position tab slider now that modal is in DOM flow with dimensions
+      Modal.switchTab(Modal._currentTab || "login");
     });
   }
 
-  // Keyboard: Escape closes manual modal
-  document.addEventListener("keydown", e => {
-    if (e.key === "Escape") {
-      const authModal = document.getElementById("authModal");
-      if (authModal?.classList.contains("manual-show")) Modal.close();
+  // Password visibility toggles (data-pw-toggle="inputId")
+  document.addEventListener("click", e => {
+    const btn = e.target.closest("[data-pw-toggle]");
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const inputId = btn.getAttribute("data-pw-toggle");
+    const input   = document.getElementById(inputId);
+    if (!input) return;
+    const icon = btn.querySelector("i");
+    if (input.type === "password") {
+      input.type = "text";
+      if (icon) { icon.classList.remove("bi-eye"); icon.classList.add("bi-eye-slash"); }
+      btn.setAttribute("aria-label", "Hide password");
+    } else {
+      input.type = "password";
+      if (icon) { icon.classList.remove("bi-eye-slash"); icon.classList.add("bi-eye"); }
+      btn.setAttribute("aria-label", "Show password");
     }
+    input.focus();
   });
 }
 
@@ -769,8 +719,8 @@ document.addEventListener("DOMContentLoaded", () => {
   Animations.initMetricsCounter();
   loadEntities();
 
-  // Init tab slider position after fonts load
-  requestAnimationFrame(() => Modal.switchTab("login"));
+  // Position tab slider once fonts/layout are ready
+  setTimeout(() => Modal.switchTab("login"), 100);
 });
 
 })(); // end IIFE

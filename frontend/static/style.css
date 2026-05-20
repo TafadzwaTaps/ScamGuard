@@ -821,6 +821,44 @@ body {
 @keyframes toast-out { from { opacity:1; transform:translateX(0); } to { opacity:0; transform:translateX(24px); } }
 
 /* ── Auth Modal ───────────────────────────────────────────────────────────── */
+/*
+ * #authModal is a custom overlay — NO Bootstrap .modal class.
+ * All interaction is fully controlled by bootstrap-modal.js v3.
+ * display:flex is set by JS when open; display:none when closed.
+ */
+#authModal {
+  /* Base styles set inline in HTML for initial-paint correctness.
+     These are JS-controlled overrides: */
+  cursor: default;
+}
+#authModal > div {
+  /* The inner card container */
+  animation: modalSlideIn .22s cubic-bezier(.16,1,.3,1) forwards;
+}
+@keyframes modalSlideIn {
+  from { opacity: 0; transform: translateY(-18px) scale(.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);   }
+}
+/* Password toggle button sits on top of input */
+.pw-toggle-btn {
+  position: absolute;
+  right: .75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: .25rem;
+  border-radius: 4px;
+  font-size: .9rem;
+  z-index: 10;
+  pointer-events: auto;
+  transition: color .2s;
+}
+.pw-toggle-btn:hover { color: var(--cyan); }
+.icon-input-pw { padding-left: 2.6rem; padding-right: 2.6rem; }
+
 .sg-modal-content {
   background: var(--surface) !important;
   border: 1px solid var(--border-2) !important;

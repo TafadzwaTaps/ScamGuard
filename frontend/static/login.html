@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Login — ScamGuard</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"/>
+  <link rel="stylesheet" href="/static/auth.css"/>
+</head>
+<body>
+
+  <!-- Back to home -->
+  <a href="/" class="back-link">
+    <svg viewBox="0 0 20 20"><path d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"/></svg>
+    Back to ScamGuard
+  </a>
+
+  <main class="auth-page">
+    <div class="auth-card">
+
+      <!-- Header -->
+      <div class="auth-header">
+        <a href="/" class="auth-logo">
+          <div class="auth-logo-icon">
+            <i class="bi bi-shield-fill-check" style="color:#fff"></i>
+          </div>
+          <span class="auth-logo-text">ScamGuard</span>
+        </a>
+        <h1 class="auth-title">Welcome back</h1>
+        <p class="auth-subtitle">Sign in to your intelligence account</p>
+      </div>
+
+      <!-- Body -->
+      <div class="auth-body">
+
+        <!-- Alert -->
+        <div id="alert" class="auth-alert" role="alert" aria-live="assertive"></div>
+
+        <!-- Form -->
+        <form id="login-form" novalidate autocomplete="on">
+
+          <!-- Email -->
+          <div class="field">
+            <label class="field-label" for="email">Email Address</label>
+            <div class="field-wrap">
+              <span class="field-icon">
+                <svg viewBox="0 0 20 20"><path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z"/><path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z"/></svg>
+              </span>
+              <input
+                type="email"
+                id="email"
+                name="email"
+                class="field-input"
+                placeholder="you@example.com"
+                autocomplete="email"
+                required
+              />
+            </div>
+          </div>
+
+          <!-- Password -->
+          <div class="field">
+            <label class="field-label" for="password">Password</label>
+            <div class="field-wrap">
+              <span class="field-icon">
+                <svg viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/></svg>
+              </span>
+              <input
+                type="password"
+                id="password"
+                name="password"
+                class="field-input has-toggle"
+                placeholder="••••••••"
+                autocomplete="current-password"
+                required
+              />
+              <button type="button" class="pw-toggle" data-for="password" aria-label="Show password" tabindex="-1">
+                <svg viewBox="0 0 20 20"><path d="M10 3.5C7 3.5 4 8 4 8s3 4.5 6 4.5S16 8 16 8s-3-4.5-6-4.5zM10 11a3 3 0 110-6 3 3 0 010 6z"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Submit -->
+          <button type="submit" id="submit-btn" class="auth-btn btn-login">
+            <span class="spin"></span>
+            <span class="btn-icon"><i class="bi bi-shield-lock"></i></span>
+            <span class="btn-text">Access Intelligence Portal</span>
+          </button>
+
+        </form>
+
+        <!-- Switch -->
+        <p class="auth-switch">
+          New analyst? <a href="/register">Create free account &rarr;</a>
+        </p>
+
+        <!-- Security note -->
+        <div class="auth-security">
+          <svg viewBox="0 0 20 20"><path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+          Secured by Supabase Auth &middot; End-to-end encrypted &middot; Never shared
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/auth.js"></script>
+  <script>
+    "use strict";
+    const form    = document.getElementById("login-form");
+    const btn     = document.getElementById("submit-btn");
+    const alertEl = document.getElementById("alert");
+
+    form.addEventListener("submit", e => {
+      e.preventDefault();
+      const email    = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+      handleLogin(email, password, btn, alertEl);
+    });
+
+    // Enter key support
+    document.getElementById("password").addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); form.dispatchEvent(new Event("submit")); }
+    });
+
+    // If already logged in, go home
+    const token = (function(){
+      try { return localStorage.getItem("sg_token"); } catch(_){ return null; }
+    })();
+    if (token) window.location.href = "/";
+  </script>
+</body>
+</html>

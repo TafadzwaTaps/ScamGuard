@@ -61,10 +61,10 @@
         <span class="pulse-dot" aria-hidden="true"></span>
         <span class="status-text">System Online</span>
       </div>
-      <button class="nav-login-btn" id="nav-auth-btn" aria-label="Open login dialog">
+      <a href="/login" class="nav-login-btn" id="nav-auth-btn" aria-label="Login to ScamGuard">
         <i class="bi bi-person-lock" aria-hidden="true"></i>
         <span>Login</span>
-      </button>
+      </a>
       <div class="nav-user-pill d-none" id="nav-user-info" role="status" aria-live="polite">
         <div class="user-avatar" id="nav-avatar-letter" aria-hidden="true">U</div>
         <span class="user-email" id="nav-user-email"></span>
@@ -396,9 +396,9 @@
       <div class="lock-text">
         <strong>Authentication required</strong> to submit intelligence reports.
       </div>
-      <button class="lock-btn" id="lock-login-btn">
+      <a href="/login" class="lock-btn" id="lock-login-btn">
         <i class="bi bi-person-lock"></i> Login / Register
-      </button>
+      </a>
     </div>
 
     <div id="report-alert"   class="sg-alert sg-alert-err"  role="alert" aria-live="polite"></div>
@@ -540,117 +540,10 @@
 <!-- ═══════════════════════════════════════════════════════════════════════════
   AUTH MODAL
 ════════════════════════════════════════════════════════════════════════════ -->
-<div class="modal fade" id="authModal" tabindex="-1"
-     aria-labelledby="authModalTitle" aria-modal="true" role="dialog">
-  <div class="modal-dialog modal-dialog-centered" style="max-width:420px">
-    <div class="sg-modal-content">
-
-      <!-- Modal header -->
-      <div class="modal-hdr">
-        <div class="modal-brand">
-          <div class="modal-shield" aria-hidden="true"><i class="bi bi-shield-lock-fill"></i></div>
-          <span id="authModalTitle">ScamGuard Intelligence Portal</span>
-        </div>
-        <button class="modal-close-btn" data-bs-dismiss="modal" aria-label="Close dialog">
-          <i class="bi bi-x-lg" aria-hidden="true"></i>
-        </button>
-      </div>
-
-      <!-- Tab switcher -->
-      <div class="auth-tab-bar" role="tablist" aria-label="Login or Register">
-        <button class="auth-tab-btn active" id="tab-login"
-                role="tab" aria-selected="true" aria-controls="login-form-wrap"
-                data-tab="login">Login</button>
-        <button class="auth-tab-btn" id="tab-register"
-                role="tab" aria-selected="false" aria-controls="register-form-wrap"
-                data-tab="register">Register</button>
-        <div class="tab-slider" id="tab-slider"></div>
-      </div>
-
-      <!-- Alerts -->
-      <div class="modal-body-inner">
-        <div id="auth-modal-alert"   class="sg-alert sg-alert-err"  role="alert"  aria-live="assertive"></div>
-        <div id="auth-modal-success" class="sg-alert sg-alert-ok"   role="status" aria-live="polite"></div>
-
-        <!-- Login form -->
-        <div id="login-form-wrap" role="tabpanel" aria-labelledby="tab-login">
-          <div class="modal-field">
-            <label class="sg-label" for="login-email">Email Address</label>
-            <div class="input-icon-wrap">
-              <i class="bi bi-envelope-fill input-icon" aria-hidden="true"></i>
-              <input type="email" id="login-email" class="sg-input icon-input"
-                     placeholder="you@example.com" autocomplete="email" aria-required="true"/>
-            </div>
-          </div>
-          <div class="modal-field">
-            <label class="sg-label" for="login-password">Password</label>
-            <div class="input-icon-wrap">
-              <i class="bi bi-lock-fill input-icon" aria-hidden="true"></i>
-              <input type="password" id="login-password" class="sg-input icon-input"
-                     placeholder="••••••••" autocomplete="current-password" aria-required="true"/>
-            </div>
-          </div>
-          <div id="login-spinner" class="sg-spinner" aria-label="Logging in…">
-            <div class="spinner-ring"></div><span>Authenticating…</span>
-          </div>
-          <button class="modal-submit-btn login-submit" id="login-submit-btn" aria-label="Login to ScamGuard">
-            <i class="bi bi-shield-lock" aria-hidden="true"></i>
-            Access Intelligence Portal
-          </button>
-          <p class="modal-switch-hint">
-            New analyst? <button class="text-link" data-switch-tab="register">Create free account →</button>
-          </p>
-        </div>
-
-        <!-- Register form -->
-        <div id="register-form-wrap" class="d-none" role="tabpanel" aria-labelledby="tab-register">
-          <div class="modal-field">
-            <label class="sg-label" for="reg-email">Email Address</label>
-            <div class="input-icon-wrap">
-              <i class="bi bi-envelope-fill input-icon" aria-hidden="true"></i>
-              <input type="email" id="reg-email" class="sg-input icon-input"
-                     placeholder="you@example.com" autocomplete="email" aria-required="true"/>
-            </div>
-          </div>
-          <div class="modal-field">
-            <label class="sg-label" for="reg-password">
-              Password <span class="hint-text">(min 6 characters)</span>
-            </label>
-            <div class="input-icon-wrap">
-              <i class="bi bi-lock-fill input-icon" aria-hidden="true"></i>
-              <input type="password" id="reg-password" class="sg-input icon-input"
-                     placeholder="Choose a strong password" autocomplete="new-password" aria-required="true"/>
-            </div>
-          </div>
-          <div id="register-spinner" class="sg-spinner" aria-label="Creating account…">
-            <div class="spinner-ring" style="border-color:var(--green)"></div>
-            <span>Creating account…</span>
-          </div>
-          <button class="modal-submit-btn register-submit" id="register-submit-btn" aria-label="Create ScamGuard account">
-            <i class="bi bi-person-plus-fill" aria-hidden="true"></i>
-            Join the Intelligence Network
-          </button>
-          <p class="modal-switch-hint">
-            Already a member? <button class="text-link" data-switch-tab="login">Login →</button>
-          </p>
-        </div>
-
-        <!-- Security note -->
-        <div class="modal-security-note">
-          <i class="bi bi-shield-check" style="color:var(--green)" aria-hidden="true"></i>
-          Secured by Supabase Auth · End-to-end encrypted · Never shared
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- Toast container -->
 <div class="toast-container" id="toast-container" aria-live="polite" role="log"></div>
 
-<!-- Bootstrap JS: self-hosted, synchronous — no CDN, no SRI, no tracking prevention issues -->
-<script src="/static/bootstrap-modal.js"></script>
-<!-- App JS loads after bootstrap is defined -->
 <script src="/static/app.js"></script>
 </body>
 </html>
