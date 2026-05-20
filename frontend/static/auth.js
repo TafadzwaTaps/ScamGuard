@@ -135,11 +135,10 @@ async function handleRegister(email, password, btn, alertEl) {
       return;
     }
 
-    // Show success — don't redirect yet, user must confirm email
-    showAlert(alertEl, data.message || "Account created! Check your email inbox to confirm, then log in.", "ok");
-
-    // After 3s redirect to login
-    setTimeout(() => { window.location.href = "/login"; }, 3500);
+    // Redirect to /confirm which shows the "check your email" instructions
+    // Store the email so the confirm page can personalise the message
+    try { sessionStorage.setItem("sg_pending_email", email); } catch(_) {}
+    window.location.href = "/confirm";
 
   } catch (_) {
     showAlert(alertEl, "Network error — please check your connection and try again.");

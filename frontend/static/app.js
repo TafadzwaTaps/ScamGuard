@@ -111,9 +111,13 @@ const API = {
     return res.json();
   },
   async entities(limit = 10) {
-    const res = await fetch(`${API_BASE}/api/v1/entities?limit=${limit}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/entities?limit=${limit}`);
+      if (!res.ok) return [];   // Silently return empty — never redirect
+      return res.json();
+    } catch (_) {
+      return [];
+    }
   },
 };
 
@@ -580,13 +584,18 @@ async function handleRegister() {
 /* ── Load Entities ── */
 async function loadEntities() {
   const errEl = document.getElementById("recent-error");
-  UI.hideAlert("recent-error");
+  // Guard: only run if the table exists on this page
+  if (!document.getElementById("recent-tbody")) return;
   try {
     const list = await API.entities(10);
     UI.renderEntities(list);
   } catch (err) {
-    console.error("[ScamGuard] Entity load error:", err);
-    if (errEl) UI.showAlert("recent-error", "Could not load threat intelligence feed.");
+    console.warn("[ScamGuard] Entity load skipped:", err.message);
+    // Show friendly error but do NOT redirect or retry-loop
+    if (errEl) {
+      errEl.style.display = "block";
+      errEl.textContent   = "Could not load threat data. Refresh to try again.";
+    }
   }
 }
 
@@ -718,9 +727,7 @@ document.addEventListener("DOMContentLoaded", () => {
   Animations.initTicker();
   Animations.initMetricsCounter();
   loadEntities();
-
-  // Position tab slider once fonts/layout are ready
-  setTimeout(() => Modal.switchTab("login"), 100);
+  // Note: no modal tab init needed — auth uses separate pages
 });
 
 })(); // end IIFE

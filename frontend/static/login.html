@@ -94,6 +94,9 @@
         <p class="auth-switch">
           New analyst? <a href="/register">Create free account &rarr;</a>
         </p>
+        <p class="auth-switch" style="margin-top:.5rem">
+          <a href="/" style="color:var(--text-3);font-size:.82rem">← Continue exploring without an account</a>
+        </p>
 
         <!-- Security note -->
         <div class="auth-security">
@@ -124,11 +127,8 @@
       if (e.key === "Enter") { e.preventDefault(); form.dispatchEvent(new Event("submit")); }
     });
 
-    // If already logged in, go home
-    const token = (function(){
-      try { return localStorage.getItem("sg_token"); } catch(_){ return null; }
-    })();
-    if (token) window.location.href = "/";
+    // Note: we intentionally do NOT auto-redirect logged-in users.
+    // Users can always visit /login to switch accounts.
   </script>
 </body>
 </html>

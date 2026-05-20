@@ -104,6 +104,15 @@
             </div>
           </div>
 
+          <!-- Consent & legal -->
+          <div class="field" style="margin-bottom:.85rem">
+            <label style="display:flex;align-items:flex-start;gap:.6rem;cursor:pointer;font-size:.83rem;color:var(--text-2);line-height:1.5">
+              <input type="checkbox" id="consent-check" required
+                     style="width:16px;height:16px;margin-top:2px;accent-color:var(--green);flex-shrink:0;cursor:pointer"/>
+              <span>I agree to the <a href="/terms" target="_blank" style="color:var(--cyan)">Terms of Use</a> and <a href="/privacy" target="_blank" style="color:var(--cyan)">Privacy Policy</a>. I confirm my report submissions will be honest and in good faith.</span>
+            </label>
+          </div>
+
           <!-- Submit -->
           <button type="submit" id="submit-btn" class="auth-btn btn-register">
             <span class="spin"></span>
@@ -116,6 +125,9 @@
         <!-- Switch -->
         <p class="auth-switch">
           Already have an account? <a href="/login">Sign in &rarr;</a>
+        </p>
+        <p class="auth-switch" style="margin-top:.5rem">
+          <a href="/" style="color:var(--text-3);font-size:.82rem">← Explore ScamGuard first</a>
         </p>
 
         <!-- Security note -->
@@ -140,7 +152,12 @@
       const email    = document.getElementById("email").value.trim();
       const password = document.getElementById("password").value;
       const confirm  = document.getElementById("confirm-password").value;
+      const consent  = document.getElementById("consent-check")?.checked;
 
+      if (!consent) {
+        showAlert(alertEl, "Please agree to the Terms of Use and Privacy Policy to continue.");
+        return;
+      }
       if (password !== confirm) {
         showAlert(alertEl, "Passwords do not match. Please try again.");
         return;

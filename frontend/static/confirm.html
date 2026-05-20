@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Confirm Email — ScamGuard</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>"/>
+  <link rel="stylesheet" href="/static/auth.css"/>
+  <style>
+    .confirm-icon {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 1.25rem;
+      font-size: 2rem;
+    }
+    .icon-loading  { background: rgba(79,156,249,.15); color: #4f9cf9; animation: pulse 1.4s ease-in-out infinite; }
+    .icon-success  { background: rgba(16,217,148,.15); color: #10d994; }
+    .icon-error    { background: rgba(244,63,94,.15);  color: #f43f5e; }
+    @keyframes pulse { 0%,100%{ opacity:1; } 50%{ opacity:.5; } }
+
+    .confirm-title {
+      font-family: var(--font-display);
+      font-size: 1.4rem; font-weight: 700;
+      text-align: center; margin-bottom: .5rem;
+    }
+    .confirm-msg {
+      text-align: center; color: var(--text-2);
+      font-size: .92rem; line-height: 1.6;
+      margin-bottom: 1.5rem;
+    }
+    .confirm-btn {
+      display: block; width: 100%;
+      padding: .82rem;
+      background: linear-gradient(135deg, var(--blue-deep) 0%, #0e7490 100%);
+      color: #fff; border: none; border-radius: var(--radius);
+      font-family: var(--font-display); font-size: .95rem; font-weight: 600;
+      cursor: pointer; text-align: center; text-decoration: none;
+      transition: opacity .2s;
+    }
+    .confirm-btn:hover { opacity: .88; }
+    .confirm-btn.secondary {
+      background: var(--surface-2);
+      border: 1px solid var(--border-2);
+      color: var(--text-2);
+      margin-top: .6rem;
+    }
+    .steps {
+      display: flex; flex-direction: column; gap: .6rem;
+      margin: 1.1rem 0;
+    }
+    .step {
+      display: flex; align-items: flex-start; gap: .7rem;
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: .7rem .9rem;
+      font-size: .85rem; color: var(--text-2);
+    }
+    .step-num {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--cyan-glow); color: var(--cyan);
+      display: flex; align-items: center; justify-content: center;
+      font-size: .72rem; font-weight: 700; flex-shrink: 0;
+      border: 1px solid rgba(0,212,255,.3);
+    }
+  </style>
+</head>
+<body>
+
+  <main class="auth-page">
+    <div class="auth-card" style="max-width:460px">
+
+      <div class="auth-header">
+        <a href="/" class="auth-logo">
+          <div class="auth-logo-icon">
+            <svg viewBox="0 0 20 20" style="width:20px;height:20px;fill:#fff"><path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+          </div>
+          <span class="auth-logo-text">ScamGuard</span>
+        </a>
+      </div>
+
+      <div class="auth-body" id="card-body">
+
+        <!-- Loading state -->
+        <div id="state-loading">
+          <div class="confirm-icon icon-loading">⏳</div>
+          <div class="confirm-title">Confirming your email…</div>
+          <div class="confirm-msg">Please wait while we verify your account.</div>
+        </div>
+
+        <!-- Success state (hidden initially) -->
+        <div id="state-success" style="display:none">
+          <div class="confirm-icon icon-success">✓</div>
+          <div class="confirm-title">Email Confirmed! 🎉</div>
+          <div class="confirm-msg">
+            Your ScamGuard account is now active.<br/>
+            You can now log in and start protecting yourself from scams.
+          </div>
+          <a href="/login" class="confirm-btn">Sign In to ScamGuard →</a>
+          <a href="/" class="confirm-btn secondary">Browse as Guest</a>
+        </div>
+
+        <!-- Already confirmed state (hidden initially) -->
+        <div id="state-already" style="display:none">
+          <div class="confirm-icon icon-success">✓</div>
+          <div class="confirm-title">Already Confirmed</div>
+          <div class="confirm-msg">
+            Your email has already been verified.<br/>
+            You can log in with your credentials.
+          </div>
+          <a href="/login" class="confirm-btn">Sign In →</a>
+        </div>
+
+        <!-- Error state (hidden initially) -->
+        <div id="state-error" style="display:none">
+          <div class="confirm-icon icon-error">✕</div>
+          <div class="confirm-title">Confirmation Failed</div>
+          <div class="confirm-msg" id="error-msg">
+            The confirmation link is invalid or has expired.
+          </div>
+
+          <div class="steps">
+            <div class="step">
+              <div class="step-num">1</div>
+              <div>Register again at <a href="/register" style="color:var(--cyan)">ScamGuard Register</a> with the same email.</div>
+            </div>
+            <div class="step">
+              <div class="step-num">2</div>
+              <div>Check your inbox (and spam folder) for a new confirmation email.</div>
+            </div>
+            <div class="step">
+              <div class="step-num">3</div>
+              <div>Click the link in the email — it expires in 1 hour.</div>
+            </div>
+          </div>
+
+          <a href="/register" class="confirm-btn">Try Again →</a>
+          <a href="/" class="confirm-btn secondary">Continue as Guest</a>
+        </div>
+
+        <!-- No token state (hidden initially) -->
+        <div id="state-notoken" style="display:none">
+          <div class="confirm-icon" style="background:rgba(251,191,36,.15);color:#fbbf24;font-size:2rem">📧</div>
+          <div class="confirm-title">Check Your Email</div>
+          <div class="confirm-msg">
+            A confirmation link was sent to
+            <strong class="pending-email-display" style="color:var(--cyan);display:none"></strong><br/>
+            <span id="notoken-generic-msg">your email address.</span>
+            Click the link in the email to activate your account.
+          </div>
+
+          <div class="steps">
+            <div class="step">
+              <div class="step-num">1</div>
+              <div>Open the email from <strong>ScamGuard / Supabase</strong> in your inbox.</div>
+            </div>
+            <div class="step">
+              <div class="step-num">2</div>
+              <div>Check your <strong>spam or junk folder</strong> if you don't see it within 2 minutes.</div>
+            </div>
+            <div class="step">
+              <div class="step-num">3</div>
+              <div>Click <strong>"Confirm your email"</strong> in the email to activate your account.</div>
+            </div>
+          </div>
+
+          <a href="/login" class="confirm-btn">Already confirmed? Sign In →</a>
+          <a href="/" class="confirm-btn secondary">Explore ScamGuard first</a>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <script>
+  "use strict";
+
+  // ── Parse Supabase token from URL hash ──────────────────────────────────
+  // Supabase sends: /confirm#access_token=...&type=signup
+  // or:            /?access_token=...&type=signup  (if redirect URL has no hash)
+  function parseSupabaseParams() {
+    // Check hash first (Supabase default)
+    const hash   = window.location.hash.replace(/^#/, "");
+    const search = window.location.search.replace(/^\?/, "");
+    const raw    = hash || search;
+    if (!raw) return {};
+    const params = {};
+    raw.split("&").forEach(pair => {
+      const [k, v] = pair.split("=");
+      if (k) params[decodeURIComponent(k)] = decodeURIComponent(v || "");
+    });
+    return params;
+  }
+
+  function show(id) {
+    ["state-loading","state-success","state-already","state-error","state-notoken"]
+      .forEach(s => document.getElementById(s).style.display = s === id ? "block" : "none");
+  }
+
+  // ── Storage helper ──────────────────────────────────────────────────────
+  function storeSession(token, email) {
+    try {
+      localStorage.setItem("sg_token", token);
+      localStorage.setItem("sg_email", email || "");
+    } catch(_) {}
+  }
+
+  // ── Main ────────────────────────────────────────────────────────────────
+  const params = parseSupabaseParams();
+  const token  = params["access_token"];
+  const type   = params["type"];   // "signup" | "recovery" | etc.
+
+  // Show pending email if we know it (from register flow)
+  let pendingEmail = "";
+  try { pendingEmail = sessionStorage.getItem("sg_pending_email") || ""; } catch(_) {}
+  if (pendingEmail) {
+    document.querySelectorAll(".pending-email-display").forEach(el => {
+      el.textContent = pendingEmail;
+      el.parentElement.style.display = "block";
+    });
+  }
+
+  if (!token) {
+    // No token in URL — user arrived here directly or link already used
+    show("state-notoken");
+  } else if (type === "signup" || type === "email_confirmation" || type === "email") {
+    // Valid confirmation token — store it so user is immediately logged in
+    const email = params["email"] || "";
+
+    // Try to decode email from JWT if not in params
+    let userEmail = email;
+    if (!userEmail && token) {
+      try {
+        const payload = JSON.parse(atob(token.split(".")[1]));
+        userEmail = payload.email || payload.user_metadata?.email || "";
+      } catch(_) {}
+    }
+
+    // Store the session token — user is now authenticated
+    storeSession(token, userEmail);
+
+    // Clean the URL (remove the ugly token from address bar)
+    if (window.history?.replaceState) {
+      window.history.replaceState({}, document.title, "/confirm");
+    }
+
+    show("state-success");
+
+  } else if (type === "recovery") {
+    // Password reset token — redirect to a reset page (future feature)
+    // For now just log in with the token
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1]));
+      storeSession(token, payload.email || "");
+    } catch(_) {}
+    show("state-success");
+
+  } else if (token) {
+    // Unknown type but has token — treat as success
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1]));
+      storeSession(token, payload.email || "");
+    } catch(_) {}
+    if (window.history?.replaceState) {
+      window.history.replaceState({}, document.title, "/confirm");
+    }
+    show("state-success");
+  }
+  </script>
+</body>
+</html>
