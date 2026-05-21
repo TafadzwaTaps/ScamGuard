@@ -80,7 +80,27 @@ const Auth = (() => {
     return data;
   }
 
-  return { isLoggedIn, getToken, getEmail, save, clear, login, register };
+  function isTokenExpired() {
+    if (!token) return true;
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1]));
+      // exp is in seconds; Date.now() is milliseconds
+      // Give 60s grace period to account for clock skew
+      return payload.exp && (payload.exp * 1000) < (Date.now() - 60000);
+    } catch (_) { return false; }
+  }
+
+  function isLoggedIn() {
+    if (!token) return false;
+    if (isTokenExpired()) {
+      // Silently clear expired token
+      clear();
+      return false;
+    }
+    return true;
+  }
+
+  return { isLoggedIn, isTokenExpired, getToken, getEmail, save, clear, login, register };
 })();
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -106,10 +126,33 @@ const API = {
   },
   async report(payload) {
     const res = await this.post("/api/v1/report", payload);
-    if (res.status === 401) { Auth.clear(); window.location.href = "/login"; throw new Error("Session expired. Please log in again."); }
+    if (res.status === 401) {
+      // Parse the error message from backend before clearing session
+      const errData = await res.json().catch(() => ({}));
+      const msg = errData.detail || "Session expired. Please log in again.";
+      Auth.clear();
+      // If it's a real expiry, redirect; if it's another 401 reason, show message
+      if (msg.toLowerCase().includes("expir") || msg.toLowerCase().includes("log in")) {
+        window.location.href = "/login";
+      }
+      throw new Error(msg);
+    }
+    if (res.status === 409) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || "You have already reported this entity.");
+    }
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Error ${res.status}`); }
     return res.json();
   },
+  async phoneIntel(number) {
+    try {
+      const encoded = encodeURIComponent(number);
+      const res = await fetch(`${API_BASE}/api/v1/phone-intel?number=${encoded}`);
+      if (!res.ok) return null;
+      return res.json();
+    } catch (_) { return null; }
+  },
+
   async entities(limit = 10) {
     try {
       const res = await fetch(`${API_BASE}/api/v1/entities?limit=${limit}`);
@@ -297,6 +340,13 @@ const UI = {
       } else {
         noReportsEl?.classList.remove("d-none");
       }
+    }
+
+    // Phone intelligence card (shown only for phone type)
+    const phonePanel = document.getElementById("phone-intel-panel");
+    if (phonePanel) {
+      phonePanel.style.display = "none";
+      if (type === "phone") renderPhoneIntel(value, phonePanel);
     }
 
     // Pre-fill report form
@@ -582,6 +632,94 @@ async function handleRegister() {
 }
 
 /* ── Load Entities ── */
+async function renderPhoneIntel(number, container) {
+  // Show skeleton while loading
+  container.style.display = "block";
+  container.innerHTML = `
+    <div class="phone-intel-card">
+      <div class="phone-intel-header">
+        <i class="bi bi-telephone-fill"></i>
+        <span>Phone Intelligence</span>
+        <div class="phone-loading-badge">Analysing…</div>
+      </div>
+      <div class="phone-intel-skeleton"></div>
+    </div>`;
+
+  const data = await API.phoneIntel(number);
+  if (!data) {
+    container.style.display = "none";
+    return;
+  }
+
+  const typeIcon = { mobile: "📱", fixed: "☎️", voip: "💻", unknown: "📞" };
+  const typeLabel = { mobile: "Mobile", fixed: "Fixed Line", voip: "VOIP/Virtual", unknown: "Unknown" };
+  const icon = typeIcon[data.number_type] || "📞";
+
+  const riskBadge = data.risk_indicators.length > 0
+    ? `<span class="phone-risk-badge high">⚠ ${data.risk_indicators.length} Risk Indicator${data.risk_indicators.length > 1 ? "s" : ""}</span>`
+    : `<span class="phone-risk-badge safe">✓ No Risk Flags</span>`;
+
+  const indicators = data.risk_indicators.length
+    ? `<div class="phone-indicators">
+        ${data.risk_indicators.map(i => `<div class="phone-indicator-item">⚠ ${esc(i)}</div>`).join("")}
+      </div>` : "";
+
+  const categories = data.top_scam_categories.length
+    ? `<div class="phone-tags">${data.top_scam_categories.map(t =>
+        `<span class="phone-tag">${esc(t)}</span>`).join("")}</div>` : "";
+
+  const lastActivity = data.last_reported
+    ? `<div class="phone-meta-item"><span>Last Reported</span><strong>${fmtDate(data.last_reported)}</strong></div>`
+    : "";
+
+  const firstSeen = data.first_seen
+    ? `<div class="phone-meta-item"><span>First Seen</span><strong>${fmtDate(data.first_seen)}</strong></div>`
+    : "";
+
+  container.innerHTML = `
+    <div class="phone-intel-card animate-in">
+      <div class="phone-intel-header">
+        <span>${icon} Phone Intelligence</span>
+        ${riskBadge}
+      </div>
+      <div class="phone-intel-body">
+        <div class="phone-grid">
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Country</div>
+            <div class="phone-detail-value">${esc(data.country)}</div>
+          </div>
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Carrier</div>
+            <div class="phone-detail-value">${esc(data.carrier)}</div>
+          </div>
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Number Type</div>
+            <div class="phone-detail-value">${typeLabel[data.number_type] || esc(data.number_type)}</div>
+          </div>
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Format (Local)</div>
+            <div class="phone-detail-value">${esc(data.local_format || data.normalized)}</div>
+          </div>
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Reports (Total)</div>
+            <div class="phone-detail-value">${data.report_count}</div>
+          </div>
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Reports (30 days)</div>
+            <div class="phone-detail-value">${data.recent_report_count}</div>
+          </div>
+        </div>
+        ${indicators}
+        ${categories ? `<div class="phone-categories-label">Reported Scam Categories</div>${categories}` : ""}
+        ${lastActivity || firstSeen ? `<div class="phone-meta">${firstSeen}${lastActivity}</div>` : ""}
+        <div class="phone-summary">${esc(data.intel_summary)}</div>
+        <div class="phone-disclaimer">
+          ℹ Data based on number structure and community reports. Always verify independently.
+        </div>
+      </div>
+    </div>`;
+}
+
 async function loadEntities() {
   const errEl = document.getElementById("recent-error");
   // Guard: only run if the table exists on this page

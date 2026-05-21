@@ -95,7 +95,7 @@
             Your ScamGuard account is now active.<br/>
             You can now log in and start protecting yourself from scams.
           </div>
-          <a href="/login" class="confirm-btn">Sign In to ScamGuard →</a>
+          <a href="/login" class="confirm-btn">Sign In Now →</a>
           <a href="/" class="confirm-btn secondary">Browse as Guest</a>
         </div>
 
@@ -235,8 +235,11 @@
       } catch(_) {}
     }
 
-    // Store the session token — user is now authenticated
-    storeSession(token, userEmail);
+    // NOTE: The email confirmation token is ES256 — it is valid for confirming
+    // email but may not work for all API calls. We do NOT auto-login here.
+    // Instead we show success and ask user to log in for a proper session.
+    // This avoids "Session expired" errors when submitting reports.
+    // (The backend now supports ES256 too, but we still prefer a clean login)
 
     // Clean the URL (remove the ugly token from address bar)
     if (window.history?.replaceState) {

@@ -9,7 +9,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from config import ALLOWED_ORIGINS
-from routers import check, report, entities, auth, scan
+from routers import check, report, entities, auth, scan, phone
 from middleware.security import (
     SecurityHeadersMiddleware,
     RequestSizeLimitMiddleware,
@@ -69,6 +69,7 @@ app.include_router(report.router)
 app.include_router(entities.router)
 app.include_router(auth.router)
 app.include_router(scan.router)
+app.include_router(phone.router)
 
 # ── Static frontend ────────────────────────────────────────────────────────
 _BACKEND_DIR  = os.path.dirname(os.path.abspath(__file__))
