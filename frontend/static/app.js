@@ -48,7 +48,6 @@ const Auth = (() => {
   let token = Store.get("sg_token");
   let email = Store.get("sg_email");
 
-  function isLoggedIn() { return !!token; }
   function getToken()   { return token; }
   function getEmail()   { return email; }
 
@@ -84,19 +83,19 @@ const Auth = (() => {
     if (!token) return true;
     try {
       const payload = JSON.parse(atob(token.split(".")[1]));
-      // exp is in seconds; Date.now() is milliseconds
-      // Give 60s grace period to account for clock skew
-      return payload.exp && (payload.exp * 1000) < (Date.now() - 60000);
-    } catch (_) { return false; }
+      if (!payload.exp) return false;   // no expiry claim — treat as valid
+      // Token is expired when exp (seconds) * 1000 < now (milliseconds)
+      // We do NOT add grace here — let the backend be the authority on expiry
+      // The 60s buffer here would cause premature logout; backend validates exactly
+      return (payload.exp * 1000) < Date.now();
+    } catch (_) { return false; }   // decode error → treat as valid (backend will reject if bad)
   }
 
   function isLoggedIn() {
     if (!token) return false;
-    if (isTokenExpired()) {
-      // Silently clear expired token
-      clear();
-      return false;
-    }
+    // Do NOT call clear() here — that triggers DOM updates mid-request
+    // Just signal: token looks expired. The 401 handler will clear cleanly.
+    if (isTokenExpired()) return false;
     return true;
   }
 
@@ -120,28 +119,66 @@ const API = {
     });
   },
   async check(type, value) {
-    const res = await this.post("/api/v1/check", { type, value });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Error ${res.status}`); }
+    let res;
+    try {
+      res = await this.post("/api/v1/check", { type, value });
+    } catch (netErr) {
+      throw new Error("Network error — check your connection and try again.");
+    }
+    if (res.status === 429) throw new Error("Rate limit reached. Please wait a moment.");
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || `Scan failed (${res.status}). Please try again.`);
+    }
     return res.json();
   },
   async report(payload) {
     const res = await this.post("/api/v1/report", payload);
+
     if (res.status === 401) {
-      // Parse the error message from backend before clearing session
       const errData = await res.json().catch(() => ({}));
-      const msg = errData.detail || "Session expired. Please log in again.";
-      Auth.clear();
-      // If it's a real expiry, redirect; if it's another 401 reason, show message
-      if (msg.toLowerCase().includes("expir") || msg.toLowerCase().includes("log in")) {
-        window.location.href = "/login";
+      const msg = errData.detail || "";
+      const msgLow = msg.toLowerCase();
+
+      // Only redirect + clear if backend confirms authentication failure
+      // NOT for generic permission errors, validation errors, or backend bugs
+      const isAuthFailure =
+        msgLow.includes("expired") ||
+        msgLow.includes("invalid") && msgLow.includes("token") ||
+        msgLow.includes("authentication required") ||
+        msgLow.includes("please log in");
+
+      if (isAuthFailure) {
+        Auth.clear();
+        // Show message first, redirect after short delay so user sees why
+        Toast.err(msg || "Session expired — please log in again.");
+        setTimeout(() => { window.location.href = "/login"; }, 1500);
+        throw new Error(msg || "Session expired. Please log in again.");
       }
-      throw new Error(msg);
+
+      // 401 but NOT a clear auth failure — show message, do NOT logout
+      throw new Error(msg || "Authorisation error. Please try again.");
     }
+
     if (res.status === 409) {
       const e = await res.json().catch(() => ({}));
-      throw new Error(e.detail || "You have already reported this entity.");
+      throw new Error(e.detail || "You have already submitted a report for this entity.");
     }
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Error ${res.status}`); }
+    if (res.status === 422) {
+      const e = await res.json().catch(() => ({}));
+      const detail = e.detail;
+      const msg = Array.isArray(detail)
+        ? detail.map(d => d.msg || d.message || JSON.stringify(d)).join(", ")
+        : (detail || "Validation error. Please check your input.");
+      throw new Error(msg);
+    }
+    if (res.status === 429) {
+      throw new Error("Too many requests. Please wait a moment before trying again.");
+    }
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || `Server error (${res.status}). Please try again.`);
+    }
     return res.json();
   },
   async phoneIntel(number) {
@@ -789,25 +826,7 @@ function wireEvents() {
   document.getElementById("nav-logout-btn")?.addEventListener("click", () => { Auth.clear(); Toast.info("Logged out."); });
   document.getElementById("lock-login-btn")?.addEventListener("click", () => window.location.href = "/login");
 
-  // Modal tab buttons
-  document.getElementById("tab-login")?.addEventListener("click",    () => Modal.switchTab("login"));
-  document.getElementById("tab-register")?.addEventListener("click", () => Modal.switchTab("register"));
-
-  // Modal submit buttons
-  document.getElementById("login-submit-btn")?.addEventListener("click",    handleLogin);
-  document.getElementById("register-submit-btn")?.addEventListener("click", handleRegister);
-
-  // Allow Enter key in password fields
-  document.getElementById("login-password")?.addEventListener("keydown",  e => { if (e.key === "Enter") handleLogin(); });
-  document.getElementById("reg-password")?.addEventListener("keydown",    e => { if (e.key === "Enter") handleRegister(); });
-
-  // Tab switcher links inside modal (data-switch-tab attribute)
-  document.addEventListener("click", e => {
-    const sw = e.target.closest("[data-switch-tab]");
-    if (sw) Modal.switchTab(sw.dataset.switchTab);
-    const tab = e.target.closest("[data-tab]");
-    if (tab && tab.id.startsWith("tab-")) Modal.switchTab(tab.dataset.tab);
-  });
+  // Auth is on separate pages (/login, /register) — no modal wiring needed here
 
   // Result CTA buttons
   document.getElementById("result-report-cta")?.addEventListener("click", () => {
@@ -822,15 +841,6 @@ function wireEvents() {
       radio.closest(".type-radio")?.classList.add("checked");
     });
   });
-
-  // Bootstrap modal: position tab slider after modal is fully visible
-  const authModal = document.getElementById("authModal");
-  if (authModal) {
-    authModal.addEventListener("shown.bs.modal", () => {
-      // Re-position tab slider now that modal is in DOM flow with dimensions
-      Modal.switchTab(Modal._currentTab || "login");
-    });
-  }
 
   // Password visibility toggles (data-pw-toggle="inputId")
   document.addEventListener("click", e => {
