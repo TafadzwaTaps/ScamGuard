@@ -1359,3 +1359,153 @@ body {
     }
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ZIMBABWE PHONE INPUT  — +263 prefix dropdown + digit input
+   Added for Zimbabwe-only phone scanning (9 digits after +263)
+══════════════════════════════════════════════════════════════════════════ */
+
+/* Wrapper that holds the flag+code badge and the digit input side-by-side */
+.zw-phone-wrap {
+  display: flex;
+  align-items: center;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;                  /* clip children to rounded corners */
+  transition: border-color .2s, box-shadow .2s;
+  width: 100%;
+}
+.zw-phone-wrap:focus-within {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 3px var(--cyan-dim);
+}
+
+/* Static "+263 🇿🇼" prefix badge */
+.zw-prefix-badge {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  padding: 0 .85rem;
+  height: 100%;
+  border-right: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: .88rem;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+  letter-spacing: .02em;
+  user-select: none;
+  min-height: 44px;  /* match input height */
+}
+.zw-prefix-flag {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* The digit-only input field */
+.zw-digit-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: .95rem;
+  font-weight: 500;
+  padding: .78rem .9rem;
+  letter-spacing: .06em;            /* mono spacing for readability */
+  -webkit-appearance: none;
+  -moz-appearance: textfield;       /* remove spinner arrows on Firefox */
+}
+.zw-digit-input::-webkit-inner-spin-button,
+.zw-digit-input::-webkit-outer-spin-button { -webkit-appearance: none; }
+.zw-digit-input::placeholder {
+  color: var(--text-3);
+  letter-spacing: .02em;
+  font-weight: 400;
+}
+
+/* Counter showing X/9 digits remaining */
+.zw-digit-counter {
+  display: flex;
+  align-items: center;
+  padding: 0 .75rem;
+  font-family: var(--font-mono);
+  font-size: .72rem;
+  color: var(--text-3);
+  white-space: nowrap;
+  flex-shrink: 0;
+  gap: .2rem;
+  transition: color .2s;
+}
+.zw-digit-counter.valid  { color: var(--green); }
+.zw-digit-counter.excess { color: var(--red); }
+.zw-counter-num { font-weight: 700; font-size: .8rem; }
+
+/* Validation hint below the input */
+.zw-phone-hint {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .76rem;
+  color: var(--text-3);
+  margin-top: .35rem;
+  font-family: var(--font-mono);
+  letter-spacing: .01em;
+  transition: color .2s;
+  min-height: 1.1rem; /* stable height — prevents layout shift */
+}
+.zw-phone-hint.hint-ok    { color: var(--green); }
+.zw-phone-hint.hint-err   { color: var(--red); }
+.zw-phone-hint i { font-size: .78rem; flex-shrink: 0; }
+
+/* Carrier tag shown when prefix is recognised */
+.zw-carrier-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  background: var(--cyan-dim);
+  border: 1px solid rgba(0,212,255,.18);
+  border-radius: 4px;
+  padding: .12em .5em;
+  font-size: .68rem;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: .04em;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.zw-carrier-tag.carrier-econet  { color: var(--green); background: var(--green-dim); border-color: rgba(16,217,148,.2); }
+.zw-carrier-tag.carrier-netone  { color: var(--amber); background: var(--amber-dim); border-color: rgba(251,191,36,.2); }
+.zw-carrier-tag.carrier-telecel { color: var(--purple); background: rgba(167,139,250,.12); border-color: rgba(167,139,250,.2); }
+
+/* ── Only show the phone input when Phone type is selected ── */
+/* (controlled via JS — .zw-phone-row display toggled) */
+.zw-phone-row { margin-bottom: .9rem; }
+
+/* Hide the generic text input when phone tab is active */
+.phone-mode .scan-input-wrap { display: none; }
+.phone-mode .zw-phone-row    { display: block; }
+.non-phone-mode .zw-phone-row { display: none; }
+.non-phone-mode .scan-input-wrap { display: block; }
+
+/* ── Responsive ── */
+@media (max-width: 480px) {
+  .zw-prefix-badge { padding: 0 .6rem; font-size: .82rem; }
+  .zw-digit-input  { font-size: .88rem; padding: .72rem .7rem; }
+  .zw-digit-counter { padding: 0 .5rem; font-size: .68rem; }
+}
+
+/* Shake animation for invalid phone submit */
+@keyframes zw-shake {
+  0%,100% { transform: translateX(0); }
+  15%     { transform: translateX(-6px); }
+  30%     { transform: translateX(5px); }
+  45%     { transform: translateX(-4px); }
+  60%     { transform: translateX(3px); }
+  75%     { transform: translateX(-2px); }
+}

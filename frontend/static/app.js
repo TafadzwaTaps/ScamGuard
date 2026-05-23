@@ -1,19 +1,7 @@
 /**
- * ScamGuard AI — Frontend Application (v3.1 — Stabilized)
- *
- * Fixes applied vs v3.0:
- *   [FIX-1] 401 classification — only clears auth on confirmed token failure,
- *            never on validation/permission/backend errors
- *   [FIX-2] Token expiry comparison — removed the erroneous -60000 offset;
- *            expiry is now (exp * 1000) < Date.now() with a +30s grace buffer
- *   [FIX-3] Dead modal handlers (handleLogin/handleRegister) fully removed —
- *            they referenced Modal.showErr / Modal.clearAlerts which don't exist
- *   [FIX-4] Auth state is now the single source of truth in the Auth module;
- *            no duplicate state in auth.js (auth.js only handles its own pages)
- *   [FIX-5] Structured API error classification helper (classifyApiError)
- *   [FIX-6] Report submission has retry logic for transient 503 errors
- *   [FIX-7] Loading / disabled states are always cleaned up in finally blocks
- *   [FIX-8] recent-error element hidden by default on load
+ * ScamGuard AI — Frontend Application
+ * Modular vanilla JS: no inline handlers, no global pollution.
+ * Preserves all existing FastAPI backend API contracts.
  */
 "use strict";
 
@@ -34,7 +22,7 @@ const SCAN_STEPS = [
 ];
 
 /* ════════════════════════════════════════════════════════════════════════════
-   2. STORAGE MODULE — localStorage with in-memory fallback
+   2. STORAGE MODULE — localStorage with in-memory fallback (Edge tracking fix)
 ════════════════════════════════════════════════════════════════════════════ */
 const Store = (() => {
   const mem = {};
@@ -47,75 +35,35 @@ const Store = (() => {
     console.warn("[ScamGuard] localStorage blocked — using in-memory fallback.");
   }
   return {
-    get: (k)    => useLocal ? localStorage.getItem(k)    : (mem[k] ?? null),
+    get: (k)    => useLocal ? localStorage.getItem(k) : (mem[k] ?? null),
     set: (k, v) => useLocal ? localStorage.setItem(k, v) : (mem[k] = v),
-    del: (k)    => useLocal ? localStorage.removeItem(k)  : (delete mem[k]),
+    del: (k)    => useLocal ? localStorage.removeItem(k) : delete mem[k],
   };
 })();
 
 /* ════════════════════════════════════════════════════════════════════════════
-   3. AUTH MODULE  (single source of truth for session state)
+   3. AUTH MODULE
 ════════════════════════════════════════════════════════════════════════════ */
 const Auth = (() => {
-  // Read initial state from storage once on load
   let token = Store.get("sg_token");
   let email = Store.get("sg_email");
 
-  function getToken() { return token; }
-  function getEmail() { return email; }
+  function getToken()   { return token; }
+  function getEmail()   { return email; }
 
   function save(t, e) {
     token = t; email = e;
     Store.set("sg_token", t);
-    Store.set("sg_email", e || "");
+    Store.set("sg_email", e);
     UI.updateAuthState();
   }
 
   function clear() {
     token = null; email = null;
-    Store.del("sg_token");
-    Store.del("sg_email");
+    Store.del("sg_token"); Store.del("sg_email");
     UI.updateAuthState();
   }
 
-  /**
-   * [FIX-2] Token expiry check.
-   *
-   * BEFORE (buggy):
-   *   return (payload.exp * 1000) < (Date.now() - 60000);
-   *   This made a token appear expired 60 s BEFORE it actually was, triggering
-   *   premature logout. Subtracting from Date.now() moved the threshold into
-   *   the past — the opposite of a grace period.
-   *
-   * AFTER (correct):
-   *   A +30 s grace window means the token must be expired for at least 30 s
-   *   before we treat it as invalid client-side. The backend is the final
-   *   authority on expiry; the client check is only for UX (disabling the
-   *   report form before the API call even fires).
-   */
-  function isTokenExpired() {
-    if (!token) return true;
-    try {
-      const payload = JSON.parse(atob(token.split(".")[1]));
-      if (!payload.exp) return false; // no expiry claim → treat as valid
-      const GRACE_MS = 30_000;       // 30-second grace buffer
-      return (payload.exp * 1000) < (Date.now() - GRACE_MS);
-    } catch (_) {
-      // Decode failed — do NOT log out; let the backend decide
-      return false;
-    }
-  }
-
-  function isLoggedIn() {
-    if (!token) return false;
-    // Only use client-side expiry check for UI gating.
-    // Do NOT call clear() here — side effects here cause race conditions.
-    if (isTokenExpired()) return false;
-    return true;
-  }
-
-  // Login via API — used only if login is ever triggered from the main page
-  // (currently login is a separate page, so this is kept for API module use)
   async function login(emailVal, password) {
     const res  = await API.post("/api/v1/auth/login", { email: emailVal, password });
     const data = await res.json();
@@ -131,137 +79,108 @@ const Auth = (() => {
     return data;
   }
 
+  function isTokenExpired() {
+    if (!token) return true;
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1]));
+      if (!payload.exp) return false;   // no expiry claim — treat as valid
+      // Token is expired when exp (seconds) * 1000 < now (milliseconds)
+      // We do NOT add grace here — let the backend be the authority on expiry
+      // The 60s buffer here would cause premature logout; backend validates exactly
+      return (payload.exp * 1000) < Date.now();
+    } catch (_) { return false; }   // decode error → treat as valid (backend will reject if bad)
+  }
+
+  function isLoggedIn() {
+    if (!token) return false;
+    // Do NOT call clear() here — that triggers DOM updates mid-request
+    // Just signal: token looks expired. The 401 handler will clear cleanly.
+    if (isTokenExpired()) return false;
+    return true;
+  }
+
   return { isLoggedIn, isTokenExpired, getToken, getEmail, save, clear, login, register };
 })();
 
 /* ════════════════════════════════════════════════════════════════════════════
-   4. ERROR CLASSIFICATION  [FIX-5]
-   Provides structured, actionable error info from API responses.
-════════════════════════════════════════════════════════════════════════════ */
-const ErrorClass = {
-  /**
-   * Given an HTTP response and optional parsed body, return:
-   *   { type, message, shouldLogout }
-   *
-   * Types: "auth_expired" | "auth_invalid" | "auth_required" |
-   *        "validation" | "conflict" | "rate_limit" | "server" | "network"
-   */
-  classify(status, detail = "", isNetworkError = false) {
-    if (isNetworkError) {
-      return { type: "network", message: "Network error — check your connection.", shouldLogout: false };
-    }
-
-    const low = detail.toLowerCase();
-
-    if (status === 401) {
-      // [FIX-1] Only flag as auth failure if the backend message explicitly
-      // confirms it. Generic 401s (e.g. permission denied) must NOT log out.
-      const isExpired  = low.includes("expired") || low.includes("session");
-      const isInvalid  = (low.includes("invalid") && (low.includes("token") || low.includes("authentication")))
-                        || low.includes("please log in")
-                        || low.includes("authentication required")
-                        || low.includes("log in again");
-
-      if (isExpired) {
-        return { type: "auth_expired",  message: detail || "Your session has expired. Please log in again.", shouldLogout: true  };
-      }
-      if (isInvalid) {
-        return { type: "auth_invalid",  message: detail || "Invalid authentication. Please log in again.",   shouldLogout: true  };
-      }
-      // 401 but reason unclear — show message, do NOT logout
-      return { type: "auth_required",  message: detail || "Authentication required. Please log in.",         shouldLogout: false };
-    }
-
-    if (status === 409) return { type: "conflict",    message: detail || "Duplicate submission.", shouldLogout: false };
-    if (status === 422) return { type: "validation",  message: detail || "Validation error.",     shouldLogout: false };
-    if (status === 429) return { type: "rate_limit",  message: detail || "Too many requests — please wait.", shouldLogout: false };
-    if (status >= 500)  return { type: "server",      message: detail || `Server error (${status}).`,        shouldLogout: false };
-
-    return { type: "unknown", message: detail || `Request failed (${status}).`, shouldLogout: false };
-  },
-
-  /** Format Pydantic 422 detail arrays into a readable string. */
-  formatValidation(detail) {
-    if (typeof detail === "string") return detail;
-    if (Array.isArray(detail)) {
-      return detail.map(d => d.msg || d.message || JSON.stringify(d)).join("; ");
-    }
-    return "Validation error. Please check your input.";
-  },
-};
-
-/* ════════════════════════════════════════════════════════════════════════════
-   5. API MODULE — all backend calls
+   4. API MODULE — all backend calls
 ════════════════════════════════════════════════════════════════════════════ */
 const API = {
   _headers(extra = {}) {
     const h = { "Content-Type": "application/json", ...extra };
-    const tok = Auth.getToken();
-    if (tok) h["Authorization"] = `Bearer ${tok}`;
+    if (Auth.isLoggedIn()) h["Authorization"] = `Bearer ${Auth.getToken()}`;
     return h;
   },
-
   post(path, body) {
     return fetch(API_BASE + path, {
-      method:  "POST",
+      method: "POST",
       headers: this._headers(),
-      body:    JSON.stringify(body),
+      body: JSON.stringify(body),
     });
   },
-
   async check(type, value) {
     let res;
     try {
       res = await this.post("/api/v1/check", { type, value });
-    } catch (_) {
+    } catch (netErr) {
       throw new Error("Network error — check your connection and try again.");
     }
+    if (res.status === 429) throw new Error("Rate limit reached. Please wait a moment.");
     if (!res.ok) {
-      const e     = await res.json().catch(() => ({}));
-      const info  = ErrorClass.classify(res.status, e.detail || "");
-      throw new Error(info.message);
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || `Scan failed (${res.status}). Please try again.`);
     }
     return res.json();
   },
+  async report(payload) {
+    const res = await this.post("/api/v1/report", payload);
 
-  /**
-   * [FIX-1] + [FIX-6] Report submission with:
-   *   - Structured 401 classification (only logout on confirmed token failure)
-   *   - One automatic retry on 503 Service Unavailable (transient DB issue)
-   */
-  async report(payload, _retryCount = 0) {
-    let res;
-    try {
-      res = await this.post("/api/v1/report", payload);
-    } catch (_) {
-      throw new Error("Network error — check your connection and try again.");
-    }
+    if (res.status === 401) {
+      const errData = await res.json().catch(() => ({}));
+      const msg = errData.detail || "";
+      const msgLow = msg.toLowerCase();
 
-    if (!res.ok) {
-      const e      = await res.json().catch(() => ({}));
-      const detail = res.status === 422
-        ? ErrorClass.formatValidation(e.detail)
-        : (e.detail || "");
-      const info   = ErrorClass.classify(res.status, detail);
+      // Only redirect + clear if backend confirms authentication failure
+      // NOT for generic permission errors, validation errors, or backend bugs
+      const isAuthFailure =
+        msgLow.includes("expired") ||
+        msgLow.includes("invalid") && msgLow.includes("token") ||
+        msgLow.includes("authentication required") ||
+        msgLow.includes("please log in");
 
-      // Transient server error — retry once after a short delay [FIX-6]
-      if (res.status === 503 && _retryCount === 0) {
-        await sleep(1200);
-        return this.report(payload, 1);
-      }
-
-      if (info.shouldLogout) {
+      if (isAuthFailure) {
         Auth.clear();
-        Toast.err(info.message);
-        setTimeout(() => { window.location.href = "/login"; }, 1600);
+        // Show message first, redirect after short delay so user sees why
+        Toast.err(msg || "Session expired — please log in again.");
+        setTimeout(() => { window.location.href = "/login"; }, 1500);
+        throw new Error(msg || "Session expired. Please log in again.");
       }
 
-      throw new Error(info.message);
+      // 401 but NOT a clear auth failure — show message, do NOT logout
+      throw new Error(msg || "Authorisation error. Please try again.");
     }
 
+    if (res.status === 409) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || "You have already submitted a report for this entity.");
+    }
+    if (res.status === 422) {
+      const e = await res.json().catch(() => ({}));
+      const detail = e.detail;
+      const msg = Array.isArray(detail)
+        ? detail.map(d => d.msg || d.message || JSON.stringify(d)).join(", ")
+        : (detail || "Validation error. Please check your input.");
+      throw new Error(msg);
+    }
+    if (res.status === 429) {
+      throw new Error("Too many requests. Please wait a moment before trying again.");
+    }
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || `Server error (${res.status}). Please try again.`);
+    }
     return res.json();
   },
-
   async phoneIntel(number) {
     try {
       const encoded = encodeURIComponent(number);
@@ -274,30 +193,32 @@ const API = {
   async entities(limit = 10) {
     try {
       const res = await fetch(`${API_BASE}/api/v1/entities?limit=${limit}`);
-      if (!res.ok) return [];
+      if (!res.ok) return [];   // Silently return empty — never redirect
       return res.json();
-    } catch (_) { return []; }
+    } catch (_) {
+      return [];
+    }
   },
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
-   6. MODAL MODULE — [FIX-3] Stubs only; auth lives on /login and /register.
-   All dead modal logic removed. No event listeners attached to non-existent
-   modal DOM elements, no conflicting overlay handlers.
+   5. MODAL MODULE — replaced with page redirects
+   Login → /login page   Register → /register page
+   Session stored in localStorage is read on every page load.
 ════════════════════════════════════════════════════════════════════════════ */
 const Modal = {
   open(tab = "login") {
     window.location.href = tab === "register" ? "/register" : "/login";
   },
-  close()        { /* no-op — auth is on a separate page */ },
-  showErr()      { /* no-op */ },
-  showOk()       { /* no-op */ },
-  clearAlerts()  { /* no-op */ },
-  switchTab(tab) { window.location.href = tab === "register" ? "/register" : "/login"; },
+  close()       { /* no-op */ },
+  showErr()     { /* no-op */ },
+  showOk()      { /* no-op */ },
+  switchTab(tab){ window.location.href = tab === "register" ? "/register" : "/login"; },
+  _currentTab: "login",
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
-   7. TOAST MODULE
+   6. TOAST MODULE
 ════════════════════════════════════════════════════════════════════════════ */
 const Toast = {
   _container: null,
@@ -305,7 +226,7 @@ const Toast = {
     if (!this._container) this._container = document.getElementById("toast-container");
     return this._container;
   },
-  show(msg, type = "info", duration = 4500) {
+  show(msg, type = "info", duration = 4000) {
     const icons = { ok: "bi-check-circle-fill", err: "bi-exclamation-circle-fill", info: "bi-info-circle-fill" };
     const el = document.createElement("div");
     el.className = `sg-toast toast-${type}`;
@@ -318,41 +239,40 @@ const Toast = {
     }, duration);
   },
   ok(msg)   { this.show(msg, "ok"); },
-  err(msg)  { this.show(msg, "err", 6000); },
+  err(msg)  { this.show(msg, "err"); },
   info(msg) { this.show(msg, "info"); },
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
-   8. UI MODULE — DOM updates, auth state, rendering
+   7. UI MODULE — DOM updates, auth state, rendering
 ════════════════════════════════════════════════════════════════════════════ */
 const UI = {
   updateAuthState() {
     const loggedIn = Auth.isLoggedIn();
     const email    = Auth.getEmail();
 
-    setVis("nav-auth-btn",  !loggedIn);
-    setVis("nav-user-info",  loggedIn);
-    setVis("nav-logout-btn", loggedIn);
+    setVis("nav-auth-btn",   !loggedIn);
+    setVis("nav-user-info",   loggedIn);
+    setVis("nav-logout-btn",  loggedIn);
 
     if (loggedIn && email) {
       setText("nav-user-email",   email);
       setText("nav-avatar-letter", email[0].toUpperCase());
     }
 
-    const lockBar   = document.getElementById("auth-lock-notice");
+    const lockBar  = document.getElementById("auth-lock-notice");
     const submitBtn = document.getElementById("report-submit-btn");
     const fields    = document.querySelectorAll("#report-form input, #report-form textarea, #report-form select");
 
-    if (lockBar)   lockBar.style.display = loggedIn ? "none" : "flex";
-    if (submitBtn) submitBtn.disabled    = !loggedIn;
+    if (lockBar)  lockBar.style.display  = loggedIn ? "none" : "flex";
+    if (submitBtn) submitBtn.disabled     = !loggedIn;
     fields.forEach(f => { f.disabled = !loggedIn; });
   },
 
   showAlert(elOrId, msg, type = "err") {
     const el = typeof elOrId === "string" ? document.getElementById(elOrId) : elOrId;
     if (!el) return;
-    const icon = type === "err" ? "exclamation-triangle-fill" : "check-circle-fill";
-    el.innerHTML = `<i class="bi bi-${icon}" aria-hidden="true"></i> ${esc(msg)}`;
+    el.innerHTML = `<i class="bi bi-${type === "err" ? "exclamation-triangle-fill" : "check-circle-fill"}" aria-hidden="true"></i> ${esc(msg)}`;
     el.className = `sg-alert sg-alert-${type} visible`;
   },
 
@@ -375,13 +295,13 @@ const UI = {
     if (!panel) return;
 
     // Score ring
-    const circumference = 2 * Math.PI * 52;
-    const offset  = circumference - (risk_score / 100) * circumference;
+    const circumference = 2 * Math.PI * 52; // r=52
+    const offset = circumference - (risk_score / 100) * circumference;
     const ringFill = document.getElementById("ring-fill");
     if (ringFill) {
       ringFill.style.strokeDashoffset = offset;
-      ringFill.style.stroke           = scoreColor(status);
-      ringFill.style.filter           = `drop-shadow(0 0 6px ${scoreColorRaw(status)})`;
+      ringFill.style.stroke = scoreColor(status);
+      ringFill.style.filter = `drop-shadow(0 0 6px ${scoreColorRaw(status)})`;
     }
     setText("res-score", Math.round(risk_score));
     const scoreEl = document.getElementById("res-score");
@@ -398,15 +318,16 @@ const UI = {
     const entityEl = document.getElementById("res-entity-display");
     if (entityEl) entityEl.textContent = `${type.toUpperCase()} → ${value.length > 50 ? value.slice(0, 50) + "…" : value}`;
 
+    // Report count
     setText("res-report-count", report_count);
 
-    // Verdict
+    // Verdict text
     const verdict = document.getElementById("res-message");
     if (verdict) {
       const msgs = {
-        high_risk:  `This entity has been reported <strong>${report_count}</strong> time(s) with strong fraud signals detected. Exercise extreme caution.`,
-        suspicious: `This entity has been reported <strong>${report_count}</strong> time(s) with some suspicious indicators. Verify independently before engaging.`,
-        safe:       `No significant threats detected (${report_count} report(s)). Always remain vigilant.`,
+        high_risk:   `This entity has been reported <strong>${report_count}</strong> time(s) with strong fraud signals detected. Exercise extreme caution.`,
+        suspicious:  `This entity has been reported <strong>${report_count}</strong> time(s) with some suspicious indicators. Verify independently before engaging.`,
+        safe:        `No significant threats detected (${report_count} report(s)). Always remain vigilant.`,
       };
       verdict.innerHTML = msgs[status] || msgs.safe;
     }
@@ -458,7 +379,7 @@ const UI = {
       }
     }
 
-    // Phone intelligence panel (phone type only)
+    // Phone intelligence card (shown only for phone type)
     const phonePanel = document.getElementById("phone-intel-panel");
     if (phonePanel) {
       phonePanel.style.display = "none";
@@ -471,7 +392,7 @@ const UI = {
     if (repType)  repType.value  = type;
     if (repValue) repValue.value = value;
 
-    // Animate panel in
+    // Show panel
     panel.style.display = "block";
     panel.classList.remove("animate-in");
     void panel.offsetWidth;
@@ -513,7 +434,7 @@ const UI = {
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
-   9. ANIMATIONS MODULE
+   8. ANIMATIONS MODULE — canvas grid + scan beam + ticker
 ════════════════════════════════════════════════════════════════════════════ */
 const Animations = {
   initCanvas() {
@@ -529,16 +450,19 @@ const Animations = {
     resize();
     window.addEventListener("resize", resize, { passive: true });
 
+    // Grid dots
     const SPACING = 40, RADIUS = .8;
     let t = 0;
 
     const draw = () => {
       ctx.clearRect(0, 0, W, H);
       t += .008;
+
+      // Grid
       ctx.fillStyle = "rgba(0,212,255,.35)";
       for (let x = 0; x < W; x += SPACING) {
         for (let y = 0; y < H; y += SPACING) {
-          const dist  = Math.hypot(x - W / 2, y - H / 2);
+          const dist = Math.hypot(x - W / 2, y - H / 2);
           const pulse = .3 + .7 * Math.sin(t - dist * .01);
           ctx.globalAlpha = pulse * .4;
           ctx.beginPath();
@@ -546,16 +470,20 @@ const Animations = {
           ctx.fill();
         }
       }
+
+      // Radial gradient overlay
       const grad = ctx.createRadialGradient(W / 2, H * .4, 0, W / 2, H * .4, W * .55);
       grad.addColorStop(0, "rgba(0,212,255,.04)");
       grad.addColorStop(1, "transparent");
       ctx.globalAlpha = 1;
-      ctx.fillStyle   = grad;
+      ctx.fillStyle = grad;
       ctx.fillRect(0, 0, W, H);
+
       frame = requestAnimationFrame(draw);
     };
     draw();
 
+    // Cleanup on page hide
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) cancelAnimationFrame(frame);
       else draw();
@@ -563,6 +491,7 @@ const Animations = {
   },
 
   initTicker() {
+    // Duplicate ticker items for seamless loop
     const track = document.getElementById("ticker-track");
     if (!track) return;
     const clone = track.cloneNode(true);
@@ -575,11 +504,11 @@ const Animations = {
   },
 
   async animateScanProgress() {
-    const wrap = document.getElementById("scan-progress-wrap");
-    const bar  = document.getElementById("scan-progress-bar");
-    const text = document.getElementById("scan-progress-text");
-    const pct  = document.getElementById("scan-progress-pct");
-    const btn  = document.getElementById("scan-submit-btn");
+    const wrap    = document.getElementById("scan-progress-wrap");
+    const bar     = document.getElementById("scan-progress-bar");
+    const text    = document.getElementById("scan-progress-text");
+    const pct     = document.getElementById("scan-progress-pct");
+    const btn     = document.getElementById("scan-submit-btn");
     if (!wrap || !bar) return;
 
     wrap.style.display = "block";
@@ -604,6 +533,7 @@ const Animations = {
   },
 
   initMetricsCounter() {
+    // Animated number increment for hero metrics
     document.querySelectorAll(".metric-value[id]").forEach(el => {
       const target = parseInt(el.textContent.replace(/,/g, ""), 10);
       if (isNaN(target)) return;
@@ -619,7 +549,7 @@ const Animations = {
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
-   10. CONTROLLERS
+   9. CONTROLLERS — form submit handlers, wired via addEventListener
 ════════════════════════════════════════════════════════════════════════════ */
 
 /* ── Check / Scan Form ── */
@@ -630,37 +560,56 @@ async function handleCheckSubmit(e) {
   if (resultPanel) resultPanel.style.display = "none";
 
   const typeInput = document.querySelector("input[name='check-type']:checked");
-  const type  = typeInput ? typeInput.value : "message";
-  const value = document.getElementById("check-value")?.value.trim();
+  const type = typeInput ? typeInput.value : "phone";
 
-  if (!value) { UI.showAlert("check-alert", "Please enter a value to scan."); return; }
+  // Resolve value: phone uses ZW input, others use generic text input
+  let value = "";
+  if (type === "phone") {
+    const digits = (document.getElementById("zw-digit-input")?.value || "").replace(/\D/g, "");
+    // Validate: exactly 9 digits required for Zimbabwe numbers
+    if (!digits) {
+      UI.showAlert("check-alert", "Please enter a phone number.");
+      ZWPhone.shake();
+      return;
+    }
+    if (digits.length !== 9) {
+      UI.showAlert("check-alert", `Zimbabwe phone numbers must be exactly 9 digits after +263 (you entered ${digits.length}).`);
+      ZWPhone.shake();
+      return;
+    }
+    value = "+263" + digits;  // canonical E.164 sent to API
+  } else {
+    value = (document.getElementById("check-value")?.value || "").trim();
+    if (!value) {
+      UI.showAlert("check-alert", type === "url" ? "Please enter a URL to scan." : "Please enter a message to scan.");
+      return;
+    }
+  }
 
   try {
     await Animations.animateScanProgress();
     const data = await API.check(type, value);
-    UI.renderResult(data, type, value);
+    // Display the local format for phones, raw value otherwise
+    const displayValue = type === "phone"
+      ? `+263 ${document.getElementById("zw-digit-input").value.replace(/\D/g,"").replace(/(\d{2})(\d{3})(\d{4})/, "$1 $2 $3")}`
+      : value;
+    UI.renderResult(data, type, displayValue);
     Toast.ok(`Scan complete — ${statusLabel(data.status)}`);
   } catch (err) {
     UI.showAlert("check-alert", err.message);
     Toast.err("Scan failed: " + err.message);
   } finally {
-    // [FIX-7] Always restore UI even if an error occurs
     Animations.stopScanProgress();
   }
 }
 
-/* ── Report Form ── [FIX-1] [FIX-6] [FIX-7] ── */
+/* ── Report Form ── */
 async function handleReportSubmit(e) {
   e.preventDefault();
   UI.hideAlert("report-alert");
   UI.hideAlert("report-success");
 
-  if (!Auth.isLoggedIn()) {
-    // Save intended destination so login can redirect back
-    try { sessionStorage.setItem("sg_after_login", window.location.href); } catch (_) {}
-    window.location.href = "/login";
-    return;
-  }
+  if (!Auth.isLoggedIn()) { window.location.href = "/login"; return; }
 
   const type        = document.getElementById("rep-type")?.value;
   const value       = document.getElementById("rep-value")?.value.trim();
@@ -668,21 +617,14 @@ async function handleReportSubmit(e) {
   const tagsRaw     = document.getElementById("rep-tags")?.value;
   const tags        = tagsRaw ? tagsRaw.split(",").map(t => t.trim()).filter(Boolean) : [];
 
-  if (!value)       { UI.showAlert("report-alert", "Please enter the entity value (phone, URL or message)."); return; }
-  if (!description) { UI.showAlert("report-alert", "Please enter an incident description."); return; }
+  if (!value || !description) { UI.showAlert("report-alert", "Value and description are required."); return; }
   if (description.length < 10) { UI.showAlert("report-alert", "Description must be at least 10 characters."); return; }
 
-  const submitBtn = document.getElementById("report-submit-btn");
   UI.setSpinner("report-spinner", true);
-  if (submitBtn) submitBtn.disabled = true;
-
   try {
     await API.report({ type, value, description, tags });
-    // Clear only description + tags; keep type/value for follow-up
-    const descEl = document.getElementById("rep-description");
-    const tagsEl = document.getElementById("rep-tags");
-    if (descEl) descEl.value = "";
-    if (tagsEl) tagsEl.value = "";
+    document.getElementById("rep-description").value = "";
+    document.getElementById("rep-tags").value = "";
     UI.showAlert("report-success", "Report submitted — thank you for protecting the community!", "ok");
     document.getElementById("report-success")?.scrollIntoView({ behavior: "smooth" });
     Toast.ok("Intelligence report submitted!");
@@ -691,14 +633,69 @@ async function handleReportSubmit(e) {
     UI.showAlert("report-alert", err.message);
     Toast.err(err.message);
   } finally {
-    // [FIX-7] Always restore button state
     UI.setSpinner("report-spinner", false);
-    if (submitBtn) submitBtn.disabled = !Auth.isLoggedIn();
   }
 }
 
-/* ── Phone Intelligence Renderer ── */
+/* ── Login Form ── */
+async function handleLogin() {
+  const email    = document.getElementById("login-email")?.value.trim();
+  const password = document.getElementById("login-password")?.value;
+  if (!email) { Modal.showErr("Please enter your email address."); return; }
+  if (!password) { Modal.showErr("Please enter your password."); return; }
+  if (!email.includes("@")) { Modal.showErr("Please enter a valid email address."); return; }
+
+  const btn = document.getElementById("login-submit-btn");
+  if (btn) { btn.disabled = true; btn.style.opacity = ".6"; }
+  UI.setSpinner("login-spinner", true);
+  Modal.clearAlerts();
+
+  try {
+    await Auth.login(email, password);
+    Modal.close();
+    Toast.ok(`Welcome back, ${Auth.getEmail()}!`);
+  } catch (err) {
+    Modal.showErr(err.message);
+  } finally {
+    UI.setSpinner("login-spinner", false);
+    if (btn) { btn.disabled = false; btn.style.opacity = ""; }
+  }
+}
+
+/* ── Register Form ── */
+async function handleRegister() {
+  const email    = document.getElementById("reg-email")?.value.trim();
+  const password = document.getElementById("reg-password")?.value;
+  if (!email) { Modal.showErr("Please enter your email address."); return; }
+  if (!email.includes("@")) { Modal.showErr("Please enter a valid email address."); return; }
+  if (!password) { Modal.showErr("Please enter a password."); return; }
+  if (password.length < 6) { Modal.showErr("Password must be at least 6 characters."); return; }
+
+  const btn = document.getElementById("register-submit-btn");
+  if (btn) { btn.disabled = true; btn.style.opacity = ".6"; }
+  UI.setSpinner("register-spinner", true);
+  Modal.clearAlerts();
+
+  try {
+    const data = await Auth.register(email, password);
+    Modal.showOk(data.message || "Account created! Check your email inbox to confirm, then log in.");
+    Toast.ok("Account created — check your email!");
+    // Clear fields after success
+    const emailEl = document.getElementById("reg-email");
+    const pwEl    = document.getElementById("reg-password");
+    if (emailEl) emailEl.value = "";
+    if (pwEl)    pwEl.value    = "";
+  } catch (err) {
+    Modal.showErr(err.message);
+  } finally {
+    UI.setSpinner("register-spinner", false);
+    if (btn) { btn.disabled = false; btn.style.opacity = ""; }
+  }
+}
+
+/* ── Load Entities ── */
 async function renderPhoneIntel(number, container) {
+  // Show skeleton while loading
   container.style.display = "block";
   container.innerHTML = `
     <div class="phone-intel-card">
@@ -711,23 +708,27 @@ async function renderPhoneIntel(number, container) {
     </div>`;
 
   const data = await API.phoneIntel(number);
-  if (!data) { container.style.display = "none"; return; }
+  if (!data) {
+    container.style.display = "none";
+    return;
+  }
 
-  const typeIcon  = { mobile: "📱", fixed: "☎️", voip: "💻", unknown: "📞" };
+  const typeIcon = { mobile: "📱", fixed: "☎️", voip: "💻", unknown: "📞" };
   const typeLabel = { mobile: "Mobile", fixed: "Fixed Line", voip: "VOIP/Virtual", unknown: "Unknown" };
-  const icon      = typeIcon[data.number_type] || "📞";
+  const icon = typeIcon[data.number_type] || "📞";
 
   const riskBadge = data.risk_indicators.length > 0
     ? `<span class="phone-risk-badge high">⚠ ${data.risk_indicators.length} Risk Indicator${data.risk_indicators.length > 1 ? "s" : ""}</span>`
     : `<span class="phone-risk-badge safe">✓ No Risk Flags</span>`;
 
   const indicators = data.risk_indicators.length
-    ? `<div class="phone-indicators">${data.risk_indicators.map(i => `<div class="phone-indicator-item">⚠ ${esc(i)}</div>`).join("")}</div>`
-    : "";
+    ? `<div class="phone-indicators">
+        ${data.risk_indicators.map(i => `<div class="phone-indicator-item">⚠ ${esc(i)}</div>`).join("")}
+      </div>` : "";
 
   const categories = data.top_scam_categories.length
-    ? `<div class="phone-tags">${data.top_scam_categories.map(t => `<span class="phone-tag">${esc(t)}</span>`).join("")}</div>`
-    : "";
+    ? `<div class="phone-tags">${data.top_scam_categories.map(t =>
+        `<span class="phone-tag">${esc(t)}</span>`).join("")}</div>` : "";
 
   const lastActivity = data.last_reported
     ? `<div class="phone-meta-item"><span>Last Reported</span><strong>${fmtDate(data.last_reported)}</strong></div>`
@@ -745,33 +746,52 @@ async function renderPhoneIntel(number, container) {
       </div>
       <div class="phone-intel-body">
         <div class="phone-grid">
-          <div class="phone-detail-item"><div class="phone-detail-label">Country</div><div class="phone-detail-value">${esc(data.country)}</div></div>
-          <div class="phone-detail-item"><div class="phone-detail-label">Carrier</div><div class="phone-detail-value">${esc(data.carrier)}</div></div>
-          <div class="phone-detail-item"><div class="phone-detail-label">Number Type</div><div class="phone-detail-value">${typeLabel[data.number_type] || esc(data.number_type)}</div></div>
-          <div class="phone-detail-item"><div class="phone-detail-label">Format (Local)</div><div class="phone-detail-value">${esc(data.local_format || data.normalized)}</div></div>
-          <div class="phone-detail-item"><div class="phone-detail-label">Reports (Total)</div><div class="phone-detail-value">${data.report_count}</div></div>
-          <div class="phone-detail-item"><div class="phone-detail-label">Reports (30 days)</div><div class="phone-detail-value">${data.recent_report_count}</div></div>
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Country</div>
+            <div class="phone-detail-value">${esc(data.country)}</div>
+          </div>
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Carrier</div>
+            <div class="phone-detail-value">${esc(data.carrier)}</div>
+          </div>
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Number Type</div>
+            <div class="phone-detail-value">${typeLabel[data.number_type] || esc(data.number_type)}</div>
+          </div>
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Format (Local)</div>
+            <div class="phone-detail-value">${esc(data.local_format || data.normalized)}</div>
+          </div>
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Reports (Total)</div>
+            <div class="phone-detail-value">${data.report_count}</div>
+          </div>
+          <div class="phone-detail-item">
+            <div class="phone-detail-label">Reports (30 days)</div>
+            <div class="phone-detail-value">${data.recent_report_count}</div>
+          </div>
         </div>
         ${indicators}
         ${categories ? `<div class="phone-categories-label">Reported Scam Categories</div>${categories}` : ""}
         ${lastActivity || firstSeen ? `<div class="phone-meta">${firstSeen}${lastActivity}</div>` : ""}
         <div class="phone-summary">${esc(data.intel_summary)}</div>
-        <div class="phone-disclaimer">ℹ Data based on number structure and community reports. Always verify independently.</div>
+        <div class="phone-disclaimer">
+          ℹ Data based on number structure and community reports. Always verify independently.
+        </div>
       </div>
     </div>`;
 }
 
-/* ── Load Entities ── */
 async function loadEntities() {
-  if (!document.getElementById("recent-tbody")) return;
   const errEl = document.getElementById("recent-error");
-  if (errEl) errEl.style.display = "none"; // Hide error by default on each load
-
+  // Guard: only run if the table exists on this page
+  if (!document.getElementById("recent-tbody")) return;
   try {
     const list = await API.entities(10);
     UI.renderEntities(list);
   } catch (err) {
     console.warn("[ScamGuard] Entity load skipped:", err.message);
+    // Show friendly error but do NOT redirect or retry-loop
     if (errEl) {
       errEl.style.display = "block";
       errEl.textContent   = "Could not load threat data. Refresh to try again.";
@@ -795,16 +815,16 @@ async function copyResult() {
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
-   11. UTILITIES
+   10. UTILITIES
 ════════════════════════════════════════════════════════════════════════════ */
 function esc(s) {
   return String(s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
-function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
-function setVis(id, show) { const el = document.getElementById(id); if (el) el.classList.toggle("d-none", !show); }
-function sleep(ms)        { return new Promise(r => setTimeout(r, ms)); }
+function setText(id, val)   { const el = document.getElementById(id); if (el) el.textContent = val; }
+function setVis(id, show)   { const el = document.getElementById(id); if (el) el.classList.toggle("d-none", !show); }
+function sleep(ms)          { return new Promise(r => setTimeout(r, ms)); }
 
 function statusLabel(s)     { return s === "high_risk" ? "HIGH RISK" : s === "suspicious" ? "SUSPICIOUS" : "SAFE"; }
 function statusIcon(s)      { return s === "high_risk" ? "bi-exclamation-octagon-fill" : s === "suspicious" ? "bi-exclamation-triangle-fill" : "bi-shield-check"; }
@@ -812,17 +832,166 @@ function statusFromScore(s) { return s >= 60 ? "high_risk" : s >= 30 ? "suspicio
 function scoreColorRaw(s)   { return s === "high_risk" ? "#f43f5e" : s === "suspicious" ? "#fbbf24" : "#10d994"; }
 function scoreColor(s)      { return `var(--${s === "high_risk" ? "red" : s === "suspicious" ? "amber" : "green"})`; }
 function fmtDate(iso) {
-  try {
-    return new Date(iso).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  } catch { return iso; }
+  try { return new Date(iso).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
+  catch { return iso; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
-   12. EVENT WIRING — all via addEventListener, zero inline handlers
-   [FIX-3] Removed all modal form wiring (handleLogin/handleRegister) since
-   auth pages are /login and /register. No event listeners are attached to
-   elements that don't exist, eliminating silent JS errors.
+   11. EVENT WIRING — all via addEventListener, no inline onclick
 ════════════════════════════════════════════════════════════════════════════ */
+
+/* ════════════════════════════════════════════════════════════════════════════
+   ZW PHONE MODULE
+   Handles Zimbabwe-specific phone input:
+   - Shows/hides the +263 prefix input vs generic input based on tab
+   - Live validates exactly 9 digits
+   - Detects carrier from first 2 digits
+   - Shakes the input on invalid submit
+════════════════════════════════════════════════════════════════════════════ */
+const ZWPhone = {
+  // Zimbabwe carrier map: first 2 subscriber digits → carrier info
+  _CARRIERS: {
+    "71": { name: "NetOne",  cls: "carrier-netone"  },
+    "72": { name: "NetOne",  cls: "carrier-netone"  },
+    "73": { name: "Telecel", cls: "carrier-telecel" },
+    "74": { name: "Telecel", cls: "carrier-telecel" },
+    "77": { name: "Econet",  cls: "carrier-econet"  },
+    "78": { name: "Econet",  cls: "carrier-econet"  },
+  },
+
+  init() {
+    const input = document.getElementById("zw-digit-input");
+    if (!input) return;
+
+    // Force digits-only entry
+    input.addEventListener("input", () => {
+      // Strip non-digits
+      const raw   = input.value.replace(/[^0-9]/g, "");
+      // Enforce 9-char max
+      const clean = raw.slice(0, 9);
+      if (input.value !== clean) input.value = clean;
+      this._update(clean);
+    });
+
+    // Paste handler — strip non-digits, handle pasted "+263XXXXXXXXX" gracefully
+    input.addEventListener("paste", (e) => {
+      e.preventDefault();
+      const pasted = (e.clipboardData || window.clipboardData).getData("text");
+      // Strip country code if pasted as full number
+      let digits = pasted.replace(/[^0-9]/g, "");
+      if (digits.startsWith("263") && digits.length > 9) digits = digits.slice(3);
+      if (digits.startsWith("0")   && digits.length > 9) digits = digits.slice(1);
+      digits = digits.slice(0, 9);
+      input.value = digits;
+      this._update(digits);
+    });
+
+    // Initialise UI in phone mode (phone is default tab)
+    this.switchMode("phone");
+  },
+
+  _update(digits) {
+    const counterNum  = document.getElementById("zw-counter-num");
+    const counterWrap = document.getElementById("zw-counter");
+    const hintEl      = document.getElementById("zw-phone-hint");
+    const hintIcon    = document.getElementById("zw-hint-icon");
+    const hintText    = document.getElementById("zw-hint-text");
+    const carrierTag  = document.getElementById("zw-carrier-tag");
+
+    if (!counterNum) return;
+
+    const len = digits.length;
+    counterNum.textContent = len;
+
+    // Counter colour
+    counterWrap.classList.toggle("valid",  len === 9);
+    counterWrap.classList.toggle("excess", len > 9);
+
+    // Carrier detection
+    const prefix2 = digits.slice(0, 2);
+    const carrier  = this._CARRIERS[prefix2];
+
+    if (len === 0) {
+      // Empty
+      hintEl.className = "zw-phone-hint";
+      hintIcon.className = "bi bi-info-circle";
+      hintText.textContent = "Enter 9 digits · e.g. 771 234 567";
+      carrierTag.style.display = "none";
+    } else if (len < 9) {
+      // Typing in progress
+      hintEl.className = "zw-phone-hint";
+      hintIcon.className = "bi bi-pencil";
+      hintText.textContent = `${9 - len} more digit${9 - len !== 1 ? "s" : ""} needed`;
+      if (carrier && carrierTag) {
+        carrierTag.style.display = "inline-flex";
+        carrierTag.className = `zw-carrier-tag ${carrier.cls}`;
+        carrierTag.textContent = carrier.name;
+      } else if (carrierTag) {
+        carrierTag.style.display = "none";
+      }
+    } else {
+      // 9 digits — check if it's a known valid prefix
+      if (carrier) {
+        hintEl.className = "zw-phone-hint hint-ok";
+        hintIcon.className = "bi bi-check-circle-fill";
+        hintText.textContent = `+263 ${digits} · ${carrier.name} Zimbabwe`;
+        if (carrierTag) {
+          carrierTag.style.display = "inline-flex";
+          carrierTag.className = `zw-carrier-tag ${carrier.cls}`;
+          carrierTag.textContent = carrier.name;
+        }
+      } else if (digits[0] === "2" || digits[0] === "4") {
+        // Could be a fixed/landline
+        hintEl.className = "zw-phone-hint hint-ok";
+        hintIcon.className = "bi bi-check-circle-fill";
+        hintText.textContent = `+263 ${digits} · Zimbabwe landline`;
+        if (carrierTag) carrierTag.style.display = "none";
+      } else {
+        hintEl.className = "zw-phone-hint hint-err";
+        hintIcon.className = "bi bi-exclamation-circle";
+        hintText.textContent = "Unrecognised prefix · valid prefixes: 71, 72, 73, 74, 77, 78";
+        if (carrierTag) carrierTag.style.display = "none";
+      }
+    }
+  },
+
+  switchMode(type) {
+    const zwRow      = document.getElementById("zw-phone-row");
+    const genericRow = document.getElementById("generic-input-wrap");
+    const scanIcon   = document.querySelector(".scan-input-icon i");
+
+    if (type === "phone") {
+      if (zwRow)      zwRow.style.display      = "block";
+      if (genericRow) genericRow.style.display = "none";
+      document.getElementById("zw-digit-input")?.focus();
+    } else {
+      if (zwRow)      zwRow.style.display      = "none";
+      if (genericRow) genericRow.style.display = "block";
+      if (scanIcon) {
+        scanIcon.className = type === "url"
+          ? "bi bi-link-45deg"
+          : "bi bi-chat-text-fill";
+      }
+      const genericInput = document.getElementById("check-value");
+      if (genericInput) {
+        genericInput.placeholder = type === "url"
+          ? "Paste URL or website address…"
+          : "Paste suspicious message or SMS text…";
+      }
+      genericInput?.focus();
+    }
+  },
+
+  shake() {
+    const wrap = document.getElementById("zw-phone-wrap");
+    if (!wrap) return;
+    wrap.style.animation = "none";
+    wrap.offsetHeight; // reflow
+    wrap.style.animation = "zw-shake .4s ease";
+    setTimeout(() => { wrap.style.animation = ""; }, 400);
+  },
+};
+
 function wireEvents() {
   // Check form
   document.getElementById("check-form")?.addEventListener("submit", handleCheckSubmit);
@@ -830,23 +999,12 @@ function wireEvents() {
   // Report form
   document.getElementById("report-form")?.addEventListener("submit", handleReportSubmit);
 
-  // Logout
-  document.getElementById("nav-logout-btn")?.addEventListener("click", () => {
-    Auth.clear();
-    Toast.info("Logged out successfully.");
-    // Reload to reset all UI state cleanly
-    setTimeout(() => window.location.reload(), 600);
-  });
+  // Auth buttons (no inline onclick)
+  // nav-auth-btn is an <a href="/login"> — no JS needed
+  document.getElementById("nav-logout-btn")?.addEventListener("click", () => { Auth.clear(); Toast.info("Logged out."); });
+  document.getElementById("lock-login-btn")?.addEventListener("click", () => window.location.href = "/login");
 
-  // Lock bar login button (no JS redirect needed — it's an <a>)
-  // Kept as listener in case it's a <button> variant on some pages
-  document.getElementById("lock-login-btn")?.addEventListener("click", e => {
-    if (e.currentTarget.tagName !== "A") {
-      e.preventDefault();
-      try { sessionStorage.setItem("sg_after_login", window.location.href); } catch (_) {}
-      window.location.href = "/login";
-    }
-  });
+  // Auth is on separate pages (/login, /register) — no modal wiring needed here
 
   // Result CTA buttons
   document.getElementById("result-report-cta")?.addEventListener("click", () => {
@@ -854,13 +1012,17 @@ function wireEvents() {
   });
   document.getElementById("result-copy-btn")?.addEventListener("click", copyResult);
 
-  // Type radio label styling
+  // Type radio — switch between ZW phone input and generic input
   document.querySelectorAll("input[name='check-type']").forEach(radio => {
     radio.addEventListener("change", () => {
       document.querySelectorAll(".type-radio").forEach(l => l.classList.remove("checked"));
       radio.closest(".type-radio")?.classList.add("checked");
+      ZWPhone.switchMode(radio.value);
     });
   });
+
+  // ZW phone digit input — live validation
+  ZWPhone.init();
 
   // Password visibility toggles (data-pw-toggle="inputId")
   document.addEventListener("click", e => {
@@ -868,7 +1030,8 @@ function wireEvents() {
     if (!btn) return;
     e.preventDefault();
     e.stopPropagation();
-    const input = document.getElementById(btn.getAttribute("data-pw-toggle"));
+    const inputId = btn.getAttribute("data-pw-toggle");
+    const input   = document.getElementById(inputId);
     if (!input) return;
     const icon = btn.querySelector("i");
     if (input.type === "password") {
@@ -885,19 +1048,16 @@ function wireEvents() {
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
-   13. INIT
+   12. INIT
 ════════════════════════════════════════════════════════════════════════════ */
 document.addEventListener("DOMContentLoaded", () => {
-  // Hide error banner immediately on load — only shown if entities actually fail
-  const errEl = document.getElementById("recent-error");
-  if (errEl) errEl.style.display = "none";
-
   wireEvents();
   UI.updateAuthState();
   Animations.initCanvas();
   Animations.initTicker();
   Animations.initMetricsCounter();
   loadEntities();
+  // Note: no modal tab init needed — auth uses separate pages
 });
 
 })(); // end IIFE

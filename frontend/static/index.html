@@ -151,27 +151,60 @@
 
             <form id="check-form" novalidate aria-label="Fraud check form">
               <div class="scan-type-grid">
-                <label class="type-radio" aria-label="Check phone number">
-                  <input type="radio" name="check-type" value="phone" id="type-phone"/>
+                <label class="type-radio checked" aria-label="Check phone number">
+                  <input type="radio" name="check-type" value="phone" id="type-phone" checked/>
                   <span class="type-radio-face"><i class="bi bi-telephone-fill"></i><br/>Phone</span>
                 </label>
                 <label class="type-radio" aria-label="Check URL">
                   <input type="radio" name="check-type" value="url" id="type-url"/>
                   <span class="type-radio-face"><i class="bi bi-link-45deg"></i><br/>URL</span>
                 </label>
-                <label class="type-radio checked" aria-label="Check message text">
-                  <input type="radio" name="check-type" value="message" id="type-message" checked/>
+                <label class="type-radio" aria-label="Check message text">
+                  <input type="radio" name="check-type" value="message" id="type-message"/>
                   <span class="type-radio-face"><i class="bi bi-chat-text-fill"></i><br/>Message</span>
                 </label>
               </div>
 
-              <div class="scan-input-wrap">
+              <!-- ── Zimbabwe Phone Input (visible when Phone tab active) ── -->
+              <div class="zw-phone-row" id="zw-phone-row">
+                <div class="zw-phone-wrap" id="zw-phone-wrap">
+                  <div class="zw-prefix-badge" aria-label="Zimbabwe country code +263">
+                    <span class="zw-prefix-flag" aria-hidden="true">🇿🇼</span>
+                    <span>+263</span>
+                  </div>
+                  <input
+                    id="zw-digit-input"
+                    type="tel"
+                    class="zw-digit-input"
+                    placeholder="7X XXX XXXX"
+                    maxlength="9"
+                    inputmode="numeric"
+                    autocomplete="tel-national"
+                    aria-label="Phone number digits after +263"
+                    aria-describedby="zw-phone-hint"
+                  />
+                  <div class="zw-digit-counter" id="zw-counter" aria-live="polite">
+                    <span class="zw-counter-num" id="zw-counter-num">0</span>/9
+                  </div>
+                </div>
+                <div class="zw-phone-hint" id="zw-phone-hint">
+                  <i class="bi bi-info-circle" id="zw-hint-icon"></i>
+                  <span id="zw-hint-text">Enter 9 digits &nbsp;·&nbsp; e.g. 771 234 567</span>
+                  <span class="zw-carrier-tag" id="zw-carrier-tag" style="display:none"></span>
+                </div>
+              </div>
+
+              <!-- Generic text input (URL / Message tabs) -->
+              <div class="scan-input-wrap" id="generic-input-wrap" style="display:none">
                 <div class="scan-input-icon" aria-hidden="true"><i class="bi bi-shield-shaded"></i></div>
                 <input id="check-value" type="text" class="scan-input"
-                       placeholder="Paste phone number, URL, or suspicious message…"
-                       maxlength="2048" required
+                       placeholder="Paste URL or suspicious message…"
+                       maxlength="2048"
                        aria-label="Value to scan" autocomplete="off"/>
               </div>
+
+              <!-- Hidden: always holds the final value sent to the API -->
+              <input type="hidden" id="check-value-final"/>
 
               <button type="submit" class="scan-btn" id="scan-submit-btn" aria-label="Run fraud scan">
                 <span class="scan-btn-icon"><i class="bi bi-cpu"></i></span>
