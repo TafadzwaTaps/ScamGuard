@@ -1,13 +1,24 @@
 """
-Input normalisation, sanitisation, and validation.
+ScamGuard — Input Normalisation, Sanitisation, and Validation  (v3.1)
+======================================================================
 All user input passes through here before being stored or processed.
+
+Change vs v3.0:
+  normalize_value(type_="phone", ...) now delegates to
+  services.phone_normalizer.normalize_phone() which uses the
+  phonenumbers library for accurate E.164 conversion.
+
+  This is the ONLY change. All other functions are identical.
+
+  The delegation is done with a lazy import to avoid a circular import
+  (phone_normalizer imports utils.logger).
 """
 from __future__ import annotations
 import re
 import html
 from urllib.parse import urlparse, quote
 
-# ── Dangerous characters / patterns ───────────────────────────────────────
+# ── Dangerous characters / patterns ────────────────────────────────────────
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\x80-\x9f]")
 _NULL_BYTES     = re.compile(r"\x00")
 _SCRIPT_TAGS    = re.compile(r"<\s*script[^>]*>.*?<\s*/\s*script\s*>", re.IGNORECASE | re.DOTALL)
@@ -26,34 +37,42 @@ def sanitize_text(text: str, max_len: int = 4000) -> str:
     """
     if not isinstance(text, str):
         return ""
-    # Remove null bytes first
     text = _NULL_BYTES.sub("", text)
-    # Remove control characters (keep \n \t \r)
     text = _CONTROL_CHARS.sub("", text)
-    # Strip script tags
     text = _SCRIPT_TAGS.sub("", text)
-    # Strip all HTML tags
     text = _HTML_TAGS.sub("", text)
-    # Collapse excessive whitespace (keep single newlines)
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()[:max_len]
 
 
 def normalize_value(type_: str, value: str) -> str:
-    """Normalise an entity value based on its type."""
+    """
+    Normalise an entity value based on its type.
+
+    For phone numbers: delegates to services.phone_normalizer.normalize_phone()
+    which uses the phonenumbers library to produce E.164 format.
+    This ensures "+263775629690", "0775629690", and "263775629690" all
+    produce the same canonical string "+263775629690" for DB storage.
+
+    For URLs: lowercases, parses, reconstructs.
+    For messages: collapses whitespace.
+    """
     if not isinstance(value, str):
         return ""
     value = sanitize_text(value, max_len=2048)
 
     if type_ == "phone":
-        # Keep only digits and a single leading +
-        digits = re.sub(r"[^\d+]", "", value)
-        # Ensure only one + at start
-        digits = re.sub(r"\++", "+", digits)
-        if digits and digits[0] != "+":
-            pass  # local number, keep as-is
-        return digits[:20]
+        # Delegate to the phonenumbers-based normalizer
+        # Lazy import avoids potential circular dependency at module load time
+        try:
+            from services.phone_normalizer import normalize_phone
+            return normalize_phone(value)
+        except ImportError:
+            # Fallback if the module isn't available (e.g. during tests)
+            digits = re.sub(r"[^\d+]", "", value)
+            digits = re.sub(r"\++", "+", digits)
+            return digits[:20]
 
     if type_ == "url":
         try:
@@ -61,10 +80,8 @@ def normalize_value(type_: str, value: str) -> str:
             if "://" not in raw:
                 raw = "https://" + raw
             p = urlparse(raw)
-            # Reject if no valid netloc
             if not p.netloc or len(p.netloc) < 3:
                 return value[:2048]
-            # Reject IP addresses masquerading as domains (basic check)
             return p.geturl()[:2048]
         except Exception:
             return value.lower()[:2048]
@@ -85,7 +102,7 @@ def validate_url(value: str) -> bool:
 def is_safe_text(text: str) -> bool:
     """
     Quick safety check — returns False if text looks like an injection probe.
-    Used as an extra layer before DB storage.
+    Used as an extra guard layer before DB storage.
     """
     if _SQL_PROBES.search(text):
         return False
