@@ -1,6 +1,6 @@
 """
-ScamGuard — JWT Authentication Middleware (v2)
-==============================================
+ScamGuard — JWT Authentication Middleware (v2.1 — Stabilized)
+=============================================================
 Supports BOTH token types that Supabase issues:
 
   HS256 — session tokens from sign_in_with_password()
@@ -10,10 +10,10 @@ Supports BOTH token types that Supabase issues:
            Verified via Supabase JWKS endpoint (asymmetric)
            Public keys are cached in memory (TTL 1 hour)
 
-Root cause of "Session expired" bug:
-  Supabase email confirmation tokens use ES256.
-  The old middleware only accepted HS256.
-  ES256 tokens → JWTError → 401 → "Session expired" message.
+Fix history:
+  v2.0 — Added ES256 / JWKS support (root cause of "Session expired" bug)
+  v2.1 — Cleaner error messages; hardened sub-claim validation;
+          get_optional_user now also validates expiry before returning payload
 """
 from __future__ import annotations
 import os
@@ -31,7 +31,7 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 _bearer = HTTPBearer(auto_error=False)
 
-# ── JWKS cache ─────────────────────────────────────────────────────────────
+# ── JWKS cache ──────────────────────────────────────────────────────────────
 _jwks_cache: dict = {}
 _jwks_fetched_at: float = 0.0
 _JWKS_TTL = 3600  # re-fetch every hour
@@ -69,8 +69,7 @@ def _decode_es256(token: str) -> dict:
     """Decode ES256 token using Supabase JWKS public keys."""
     jwks = _get_jwks()
     if not jwks:
-        raise JWTError("JWKS not available")
-    # python-jose accepts the full JWKS dict and picks the right key by kid
+        raise JWTError("JWKS unavailable — cannot verify ES256 token")
     return jwt.decode(
         token,
         jwks,
@@ -81,11 +80,10 @@ def _decode_es256(token: str) -> dict:
 
 def _decode_token(token: str) -> dict:
     """
-    Try HS256 first (most common — login sessions).
-    Fall back to ES256 (confirmation/magic-link tokens).
-    Raises JWTError if both fail.
+    Inspect the JWT header to select the right algorithm, then decode.
+    Falls back gracefully: unknown alg → try HS256 → try ES256.
+    Raises JWTError if all attempts fail.
     """
-    # Peek at the header to choose algorithm without full decode
     try:
         import base64, json as _json
         header = _json.loads(
@@ -97,17 +95,40 @@ def _decode_token(token: str) -> dict:
 
     if alg == "ES256":
         return _decode_es256(token)
-    else:
+
+    # Default: HS256
+    try:
         return _decode_hs256(token)
+    except JWTError:
+        # Last-ditch: maybe header lied — try ES256
+        try:
+            return _decode_es256(token)
+        except Exception:
+            raise  # re-raise the ES256 error (most informative)
 
 
 def _friendly_error(exc: JWTError) -> str:
     msg = str(exc).lower()
-    if "expired" in msg or "exp" in msg:
+    if "expired" in msg or isinstance(exc, ExpiredSignatureError):
         return "Your session has expired. Please log in again."
-    if "signature" in msg or "invalid" in msg:
+    if "signature" in msg or "invalid" in msg or "verify" in msg:
         return "Invalid authentication token. Please log in again."
+    if "jwks" in msg or "unavailable" in msg:
+        return "Authentication service temporarily unavailable. Please try again."
     return "Authentication failed. Please log in again."
+
+
+def _validate_payload(payload: dict) -> dict:
+    """
+    Ensure the decoded payload contains the minimum required claims.
+    Raises JWTError if any required claim is missing or invalid.
+    """
+    sub = payload.get("sub") or payload.get("user_id") or payload.get("id")
+    if not sub:
+        raise JWTError("Token is missing the 'sub' (user ID) claim")
+    # Normalise — always expose as 'sub'
+    payload["sub"] = str(sub)
+    return payload
 
 
 def get_current_user(
@@ -122,10 +143,7 @@ def get_current_user(
         )
     try:
         payload = _decode_token(credentials.credentials)
-        # Ensure required claim exists
-        if not payload.get("sub"):
-            raise JWTError("Token missing 'sub' claim")
-        return payload
+        return _validate_payload(payload)
     except ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -143,11 +161,17 @@ def get_current_user(
 def get_optional_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> Optional[dict]:
-    """Dependency: optionally validates a JWT. Returns None if absent/invalid."""
+    """
+    Dependency: optionally validates a JWT.
+    Returns the decoded payload if valid, None if absent or invalid.
+    Never raises — always safe to use on public endpoints.
+    """
     if not credentials or not credentials.credentials:
         return None
     try:
         payload = _decode_token(credentials.credentials)
-        return payload if payload.get("sub") else None
+        return _validate_payload(payload)
     except JWTError:
+        return None
+    except Exception:
         return None

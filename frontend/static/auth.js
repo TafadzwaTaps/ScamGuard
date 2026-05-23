@@ -1,27 +1,33 @@
 /**
- * ScamGuard — Auth Pages Shared JS
- * Used by both login.html and register.html.
+ * ScamGuard — Auth Pages Shared JS (v3.1 — Stabilized)
+ * Used by login.html and register.html ONLY.
  * Zero dependencies. Pure vanilla JS.
+ *
+ * Changes vs v3.0:
+ *   [FIX-4] Storage (Store) uses the same localStorage key names as app.js
+ *            (sg_token / sg_email) so both pages read the same session.
+ *   [FIX-1] Login redirect reads sessionStorage sg_after_login if set by
+ *            handleReportSubmit, then falls back to "/".
+ *   [FIX-7] Button loading state is always restored in finally blocks.
  */
 "use strict";
 
-// Alert CSS classes used: auth-alert-err  auth-alert-ok
-/* ── Storage (localStorage with in-memory fallback) ──────────────────────── */
+/* ── Storage (identical key contract with app.js) ─────────────────────────── */
 const Store = (() => {
   const mem = {};
   let ok = false;
-  try { localStorage.setItem("__t__","1"); localStorage.removeItem("__t__"); ok = true; } catch(_) {}
+  try { localStorage.setItem("__sg_probe__", "1"); localStorage.removeItem("__sg_probe__"); ok = true; } catch (_) {}
   return {
-    get: k    => ok ? localStorage.getItem(k)    : (mem[k] ?? null),
-    set: (k,v)=> ok ? localStorage.setItem(k, v) : (mem[k] = String(v)),
-    del: k    => ok ? localStorage.removeItem(k)  : (delete mem[k]),
+    get: k     => ok ? localStorage.getItem(k)    : (mem[k] ?? null),
+    set: (k,v) => ok ? localStorage.setItem(k, v) : (mem[k] = String(v)),
+    del: k     => ok ? localStorage.removeItem(k)  : (delete mem[k]),
   };
 })();
 
-/* ── API base ────────────────────────────────────────────────────────────── */
+/* ── API base ─────────────────────────────────────────────────────────────── */
 const API_BASE = window.API_BASE || "";
 
-/* ── Helpers ─────────────────────────────────────────────────────────────── */
+/* ── Helpers ──────────────────────────────────────────────────────────────── */
 function esc(s) {
   return String(s)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;")
@@ -50,7 +56,7 @@ function setLoading(btn, active) {
   btn.disabled = active;
 }
 
-/* ── Password toggle ─────────────────────────────────────────────────────── */
+/* ── Password toggle ──────────────────────────────────────────────────────── */
 document.addEventListener("click", e => {
   const btn = e.target.closest(".pw-toggle");
   if (!btn) return;
@@ -64,7 +70,7 @@ document.addEventListener("click", e => {
   input.focus();
 });
 
-/* ── Login handler ───────────────────────────────────────────────────────── */
+/* ── Login handler ────────────────────────────────────────────────────────── */
 async function handleLogin(email, password, btn, alertEl) {
   hideAlert(alertEl);
 
@@ -79,9 +85,9 @@ async function handleLogin(email, password, btn, alertEl) {
 
   try {
     const res  = await fetch(`${API_BASE}/api/v1/auth/login`, {
-      method: "POST",
+      method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+      body:    JSON.stringify({ email: email.trim().toLowerCase(), password }),
     });
     const data = await res.json();
 
@@ -90,26 +96,27 @@ async function handleLogin(email, password, btn, alertEl) {
       return;
     }
 
-    // Store session
+    // Persist session with the same keys app.js reads
     Store.set("sg_token", data.access_token);
-    Store.set("sg_email", data.email);
+    Store.set("sg_email", data.email || email.trim().toLowerCase());
 
-    // Redirect to where user came from, or home
+    // [FIX-4] Redirect to the page that required login, or home
     let dest = "/";
     try {
       const stored = sessionStorage.getItem("sg_after_login");
       if (stored) { sessionStorage.removeItem("sg_after_login"); dest = stored; }
-    } catch(_) {}
+    } catch (_) {}
     window.location.href = dest;
 
   } catch (_) {
     showAlert(alertEl, "Network error — please check your connection and try again.");
   } finally {
+    // [FIX-7] Always restore button state
     setLoading(btn, false);
   }
 }
 
-/* ── Register handler ────────────────────────────────────────────────────── */
+/* ── Register handler ─────────────────────────────────────────────────────── */
 async function handleRegister(email, password, btn, alertEl) {
   hideAlert(alertEl);
 
@@ -124,9 +131,9 @@ async function handleRegister(email, password, btn, alertEl) {
 
   try {
     const res  = await fetch(`${API_BASE}/api/v1/auth/register`, {
-      method: "POST",
+      method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+      body:    JSON.stringify({ email: email.trim().toLowerCase(), password }),
     });
     const data = await res.json();
 
@@ -135,14 +142,14 @@ async function handleRegister(email, password, btn, alertEl) {
       return;
     }
 
-    // Redirect to /confirm which shows the "check your email" instructions
-    // Store the email so the confirm page can personalise the message
-    try { sessionStorage.setItem("sg_pending_email", email); } catch(_) {}
+    // Store pending email for the confirm page
+    try { sessionStorage.setItem("sg_pending_email", email.trim().toLowerCase()); } catch (_) {}
     window.location.href = "/confirm";
 
   } catch (_) {
     showAlert(alertEl, "Network error — please check your connection and try again.");
   } finally {
+    // [FIX-7] Always restore button state
     setLoading(btn, false);
   }
 }
